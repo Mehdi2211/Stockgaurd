@@ -1,0 +1,22 @@
+﻿# Dependencies
+node_modules/
+
+# Environment secrets – NEVER commit
+.env
+backend/.env
+frontend/.env
+
+# Build outputs
+frontend/build/
+backend/dist/
+
+# Prisma generated
+database/prisma/generated/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.log

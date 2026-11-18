@@ -1,0 +1,92 @@
+.pos-layout {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 20px;
+  max-width: 1200px;
+  margin: auto;
+}
+
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.prod-card {
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.prod-card:hover { border-color: var(--brand); }
+.prod-card b   { display: block; font-size: .95rem; }
+.prod-card span { display: block; color: var(--muted); font-size: .88rem; margin-top: 4px; }
+
+.cart-panel { display: flex; flex-direction: column; gap: 0; }
+.cart-panel h2 { margin: 0 0 12px; font-size: 1.2rem; }
+
+.cart-list { list-style: none; margin: 0 0 12px; padding: 0; }
+
+.cart-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.cart-item:last-child { border-bottom: none; }
+
+.cart-item-info { flex: 1; min-width: 0; }
+.cart-item-name { display: block; font-weight: 600; font-size: .93rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cart-item-sub  { display: block; font-size: .8rem; color: var(--muted); }
+
+.cart-item-controls { display: flex; align-items: center; gap: 4px; }
+
+.qty-btn {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  border: 1.5px solid var(--line);
+  background: var(--bg);
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.qty-btn:hover { border-color: var(--brand); }
+.qty-val { min-width: 22px; text-align: center; font-weight: 700; }
+
+.qty-del {
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--warn);
+  cursor: pointer;
+  font-size: .85rem;
+}
+.qty-del:hover { background: var(--bg); }
+
+.cart-item-total { font-weight: 700; font-size: .9rem; white-space: nowrap; }
+
+.cart-total {
+  display: flex;
+  justify-content: space-between;
+  font-size: 1.6rem;
+  font-weight: 800;
+  margin: 12px 0;
+  padding-top: 12px;
+  border-top: 2px solid var(--line);
+}
+
+.pay-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 820px) {
+  .pos-layout { grid-template-columns: 1fr; }
+}
