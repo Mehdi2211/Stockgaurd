@@ -9,7 +9,6 @@ import CreditManagement  from './pages/CreditManagement';
 import SalesHistory      from './pages/SalesHistory';
 import StockManagement   from './pages/StockManagement';
 import CashRegister      from './pages/CashRegister';
-import CreditRepayment   from './pages/CreditRepayment';
 import NotFound          from './pages/NotFound';
 
 function App() {
@@ -24,7 +23,6 @@ function App() {
           <Route path='/owner/credits'  element={<CreditManagement />} />
           <Route path='/owner/ventes'   element={<SalesHistory />} />
           <Route path='/owner/cash-register' element={<CashRegister />} />
-          <Route path='/credits/repayment' element={<CreditRepayment />} />
           <Route path='/owner/stock'    element={<StockManagement />} />
           <Route path='/404'            element={<NotFound />} />
           <Route path='*'               element={<Navigate to='/404' replace />} />

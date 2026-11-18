@@ -83,14 +83,6 @@ CREATE TABLE IF NOT EXISTS customers (
 );
 CREATE INDEX IF NOT EXISTS customers_search_idx ON customers (shop_id, lower(family_name), lower(first_name));
 
--- Fonction partagée : interdit UPDATE/DELETE/TRUNCATE sur les tables
--- financières append-only (credits, cash_movements, cash_verifications).
-CREATE OR REPLACE FUNCTION forbid_modify() RETURNS trigger AS $$
-BEGIN
-  RAISE EXCEPTION 'Table % : historique financier en lecture seule (append-only).', TG_TABLE_NAME;
-END;
-$$ LANGUAGE plpgsql;
-
 CREATE TABLE IF NOT EXISTS sales (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   shop_id         uuid NOT NULL REFERENCES shops(id),
@@ -162,30 +154,8 @@ CREATE TABLE IF NOT EXISTS credits (
     CHECK (reverses_id IS NULL OR length(btrim(coalesce(note, ''))) > 0)
 );
 CREATE INDEX IF NOT EXISTS credits_customer_idx ON credits (customer_id, created_at);
-CREATE INDEX IF NOT EXISTS credits_shop_created_idx ON credits (shop_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS credits_sale_uq     ON credits (sale_id)     WHERE sale_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS credits_reverses_uq ON credits (reverses_id) WHERE reverses_id IS NOT NULL;
-
--- Append-only : les crédits (ventes à crédit, remboursements) sont un
--- historique financier en lecture seule. Une erreur se corrige par une
--- écriture inverse (reverses_id), jamais par UPDATE/DELETE.
-DROP TRIGGER IF EXISTS credits_no_update   ON credits;
-CREATE TRIGGER credits_no_update
-  BEFORE UPDATE ON credits
-  FOR EACH ROW EXECUTE FUNCTION forbid_modify();
-DROP TRIGGER IF EXISTS credits_no_delete   ON credits;
-CREATE TRIGGER credits_no_delete
-  BEFORE DELETE ON credits
-  FOR EACH ROW EXECUTE FUNCTION forbid_modify();
-DROP TRIGGER IF EXISTS credits_no_truncate ON credits;
-CREATE TRIGGER credits_no_truncate
-  BEFORE TRUNCATE ON credits
-  FOR EACH STATEMENT EXECUTE FUNCTION forbid_modify();
-
-ALTER TABLE credits ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON credits FROM anon, authenticated;
-REVOKE ALL ON credits FROM PUBLIC;
-GRANT ALL ON credits TO service_role;
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -220,6 +190,12 @@ DO $$ BEGIN
   );
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+CREATE OR REPLACE FUNCTION forbid_modify() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'Table % : historique financier en lecture seule (append-only).', TG_TABLE_NAME;
+END;
+$$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION cash_register_check_admin() RETURNS trigger AS $$
 BEGIN

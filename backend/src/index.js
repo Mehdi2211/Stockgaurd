@@ -23,7 +23,6 @@ const customerRoutes = require("./routes/customers");
 const stockRoutes    = require("./routes/stock");
 const ownerRoutes    = require("./routes/owner");
 const cashRoutes     = require("./routes/cashRegister");
-const creditRoutes   = require("./routes/credits");
 
 const app  = express();
 const PORT = process.env.PORT || 4000;
@@ -44,7 +43,6 @@ app.use("/api/sales",     salesRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/stock",     stockRoutes);
 app.use("/api/owner",     ownerRoutes);
-app.use("/api/credits",       creditRoutes);
 app.use("/api/cash-register", cashRoutes);
 
 // Health check

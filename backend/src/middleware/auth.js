@@ -37,12 +37,4 @@ function requireOwner(req, res, next) {
   next();
 }
 
-// OWNER ou CASHIER (personnel de la boutique).
-function requireStaff(req, res, next) {
-  if (req.user?.role !== "OWNER" && req.user?.role !== "CASHIER") {
-    return res.status(403).json({ error: "Accès réservé au personnel de la boutique." });
-  }
-  next();
-}
-
-module.exports = { authenticate, requireOwner, requireStaff };
+module.exports = { authenticate, requireOwner };

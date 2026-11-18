@@ -27,16 +27,11 @@ export default function AppShell({ children }) {
         <strong className="app-brand">{kiosk?.name || "StockGuard"}</strong>
 
         <nav aria-label="Navigation principale">
-          {/* Cashier view — POS + remboursement crédit */}
+          {/* Cashier view — only the POS */}
           {role === "CASHIER" && (
-            <>
-              <NavLink to="/caisse" className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>
-                Caisse
-              </NavLink>
-              <NavLink to="/credits/repayment" className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>
-                Remboursement crédit
-              </NavLink>
-            </>
+            <NavLink to="/caisse" className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>
+              Caisse
+            </NavLink>
           )}
 
           {/* Owner view — full nav, no Caisse */}
@@ -47,7 +42,6 @@ export default function AppShell({ children }) {
               <NavLink to="/owner/stock"    className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>Stock</NavLink>
               <NavLink to="/owner/ventes"   className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>Ventes</NavLink>
               <NavLink to="/owner/cash-register" className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>Caisse</NavLink>
-              <NavLink to="/credits/repayment" className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>Remboursement crédit</NavLink>
               <NavLink to="/owner" end      className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>Tableau de bord</NavLink>
             </>
           )}

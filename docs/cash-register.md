@@ -56,18 +56,6 @@ Montant attendu à l'instant T (depuis la date d'initialisation) =
   `cash_verifications` (théorique recalculé par le serveur vs montant
   réel, écart + statut) puis une nouvelle ligne `INITIALIZATION`. Tout
   l'historique avant la nouvelle date est ignoré.
-- **Remboursements de crédit** : enregistrés via `POST /api/credits/repayments`
-  (OWNER et CASHIER, page « Remboursement crédit »). Une ligne `credits`
-  à **montant négatif** (`sale_id NULL`, `reverses_id NULL`) entre
-  immédiatement dans le montant attendu. Recherche client :
-  `GET /api/customers/search?q=...` (3 caractères min, max 5 résultats,
-  CIN masqué, jamais de téléphone ni PIN). Idempotent par `repaymentId`
-  (UUID client) ; solde client verrouillé (`FOR UPDATE`) ; append-only.
-- **Limitation connue** : un remboursement saisi par erreur ne peut pas
-  être annulé (pas de contre-passation pour l'instant). Il gonflerait le
-  montant attendu et créerait un faux manque : en attendant, le
-  propriétaire peut compenser avec « Retirer de l'argent » (ajustement)
-  et un motif.
 
 ## Convention de signe
 
