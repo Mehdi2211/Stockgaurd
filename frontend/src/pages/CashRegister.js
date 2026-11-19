@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import AppShell from "../components/AppShell";
 import { useKiosk } from "../context/KioskContext";
 import { apiFetch, getTokenRole } from "../api";
@@ -71,6 +71,7 @@ export default function CashRegister() {
 
   // État B : résultat du calcul (un clic = un calcul)
   const [result, setResult] = useState(null);
+  const [repayDetails, setRepayDetails] = useState([]);
   const [calcError, setCalcError] = useState("");
   const [calculating, setCalculating] = useState(false);
 
@@ -173,10 +174,25 @@ export default function CashRegister() {
       if (!data.initialized) {
         setExpected(data);
         setResult(null);
+        setRepayDetails([]);
         return;
       }
       setExpected(data);
       setResult(data);
+      // Détail des remboursements par créditeur (rapport).
+      // Même période que le total : depuis la date d'initialisation.
+      if (data.repaymentsCount > 0) {
+        try {
+          const rep = await apiFetch(
+            `/cash-register/repayments?from=${encodeURIComponent(data.initializedAt)}`
+          );
+          setRepayDetails(rep.repayments || []);
+        } catch {
+          setRepayDetails([]);
+        }
+      } else {
+        setRepayDetails([]);
+      }
     } catch (err) {
       setCalcError(err.message || "Le service est indisponible, réessayez.");
     } finally {
@@ -300,6 +316,7 @@ export default function CashRegister() {
       setReAmount("");
       setReTouched(false);
       setResult(null); // effacer la carte résultat
+      setRepayDetails([]);
       await loadStatus(); // mettre à jour la ligne 1 (nouvelle init)
     } catch (err) {
       setReError(err.message || "Le service est indisponible, réessayez.");
@@ -478,6 +495,26 @@ export default function CashRegister() {
                   <p className="hint" style={{ margin: 0 }}>
                     Les ventes à crédit ne sont pas comptées : aucun argent n&apos;entre en caisse.
                   </p>
+
+                  {/* Détail des remboursements par créditeur */}
+                  {repayDetails.length > 0 && (
+                    <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+                      <p className="hint" style={{ margin: "0 0 6px", fontWeight: 700 }}>
+                        Remboursements de crédit :
+                      </p>
+                      {repayDetails.map((r) => (
+                        <div key={r.id} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", fontSize: ".92rem" }}>
+                          <span>
+                            {r.customerName}
+                            <span className="hint"> · {tunisDateTime(r.createdAt)}{r.recordedByName ? ` · ${r.recordedByName}` : ""}</span>
+                          </span>
+                          <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>
+                            +{formatMillimes(Math.abs(r.amount))}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

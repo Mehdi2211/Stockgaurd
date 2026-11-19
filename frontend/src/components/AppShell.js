@@ -27,11 +27,16 @@ export default function AppShell({ children }) {
         <strong className="app-brand">{kiosk?.name || "StockGuard"}</strong>
 
         <nav aria-label="Navigation principale">
-          {/* Cashier view — only the POS */}
+          {/* Cashier view — POS + remboursements de crédit */}
           {role === "CASHIER" && (
-            <NavLink to="/caisse" className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>
-              Caisse
-            </NavLink>
+            <>
+              <NavLink to="/caisse" className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>
+                Caisse
+              </NavLink>
+              <NavLink to="/owner/credits" className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>
+                Crédits
+              </NavLink>
+            </>
           )}
 
           {/* Owner view — full nav, no Caisse */}

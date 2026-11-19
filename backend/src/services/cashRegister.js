@@ -166,4 +166,28 @@ async function computeExpected(shopId, at = new Date()) {
   }
 }
 
-module.exports = { computeExpected, getInitialization };
+// Détail des remboursements de crédit sur [from, to) avec le nom du
+// créditeur et de l'enregistreur — pour le rapport de caisse.
+async function listRepayments(shopId, from, to) {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query(
+      `SELECT cr.id, cr.amount, cr.note, cr.created_at AS "createdAt",
+              c.first_name || ' ' || c.family_name AS "customerName",
+              u.name AS "recordedByName"
+         FROM credits cr
+         JOIN customers c ON c.id = cr.customer_id
+         JOIN app_users u ON u.id = cr.recorded_by
+        WHERE cr.shop_id = $1 AND cr.amount < 0
+          AND cr.created_at >= $2 AND cr.created_at < $3
+        ORDER BY cr.created_at DESC
+        LIMIT 500`,
+      [shopId, from, to]
+    );
+    return rows.map((r) => ({ ...r, amount: Number(r.amount) }));
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { computeExpected, getInitialization, listRepayments };

@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS credits (
   created_at   timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT credits_amount_chk CHECK (
        (sale_id IS NOT NULL AND reverses_id IS NULL     AND amount > 0)
+    OR (sale_id IS NULL     AND reverses_id IS NULL     AND amount > 0)
     OR (sale_id IS NULL     AND reverses_id IS NULL     AND amount < 0)
     OR (sale_id IS NULL     AND reverses_id IS NOT NULL AND amount <> 0)
   ),

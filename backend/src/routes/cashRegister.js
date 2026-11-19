@@ -338,6 +338,21 @@ router.post("/verifications", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
+// GET /repayments?from&to — détail des remboursements de crédit avec le
+// nom du créditeur (rapport de caisse). OWNER uniquement (router.use).
+// ---------------------------------------------------------------------
+router.get("/repayments", async (req, res) => {
+  const period = parsePeriod(req, res);
+  if (!period) return;
+  try {
+    const repayments = await svc.listRepayments(req.user.shopId, period.from, period.to);
+    res.json({ repayments });
+  } catch (err) {
+    handleError(res, err, "repayments");
+  }
+});
+
+// ---------------------------------------------------------------------
 // GET /movements?from&to&limit — plus récents d'abord, avec nom admin
 // ---------------------------------------------------------------------
 router.get("/movements", async (req, res) => {

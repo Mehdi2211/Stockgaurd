@@ -77,6 +77,17 @@ Montants en **millimes** (`bigint`, 1 DT = 1000 millimes), jamais de flottant.
 - `database/migrations/001_cash_register.sql` — tables initiales.
 - `database/migrations/002_cash_register_init_date.sql` — colonne
   `effective_at` + CHECKs (NOT VALID) + bornes de montants.
+- `database/migrations/003_cash_register_reinit.sql` — plusieurs lignes
+  `INITIALIZATION` autorisées (réinitialisation ; le calcul part de la
+  plus récente).
+- `database/migrations/004_credits_repayments.sql` — `credits`
+  append-only (triggers `forbid_modify()`) + RLS + index
+  `credits_shop_created_idx` (utilisé par `computeExpected`).
+- `database/migrations/005_revert_credit_repayments.sql` — revert de 004
+  (à lancer manuellement, non exécuté par défaut).
+- `database/migrations/006_manual_credits.sql` — assouplit
+  `credits_amount_chk` pour autoriser une **dette manuelle** (`sale_id
+  NULL`, `amount > 0`) en plus des remboursements.
 - `database/schema.sql` — mis à jour avec le même contenu.
 - Tables `cash_movements` et `cash_verifications` : **append-only**
   (triggers `forbid_modify()` bloquent UPDATE / DELETE / TRUNCATE),
@@ -112,7 +123,8 @@ node scripts/apply-migration.js 002_cash_register_init_date.sql
   utilisés par `/initialize` : la date est l'heure du serveur.)
 - `src/services/cashRegister.js` — **une seule** fonction
   `computeExpected(shopId, at)` utilisée par `/expected` et
-  `/verifications` (les deux ne peuvent pas diverger).
+  `/verifications` (les deux ne peuvent pas diverger) ; `listRepayments`
+  (détail des remboursements par créditeur) ; `getInitialization`.
 - `src/routes/cashRegister.js` — endpoints ci-dessous. Chaque mutation
   prend un **`pg_advisory_xact_lock` par boutique** (`hashtext(shop_id)`)
   pour sérialiser les lectures du montant attendu (évite les races, ex.
@@ -139,6 +151,7 @@ la requête.
 | POST    | `/verifications`   | `{ actualAmount >= 0 }`                | montant attendu recalculé par le serveur, ligne insérée avec `difference` et `status` générés |
 | GET     | `/movements?from&to&limit` | plus récents d'abord, avec `admin_name` | (conservé pour l'API) |
 | GET     | `/verifications?limit`     | plus récentes d'abord, avec `admin_name` | (conservé pour l'API) |
+| GET     | `/repayments?from&to`      | détail des remboursements de crédit (nom du créditeur + de l'enregistreur) — alimente le bloc « Remboursements de crédit » de la carte résultat |
 
 ### Endpoints ventes
 
@@ -147,6 +160,27 @@ la requête.
 | POST    | `/api/sales` | `{ id: uuid, lines: [{ productId, quantity }] }` — OWNER ou CASHIER. Prix et total recalculés par le serveur ; produits fusionnés ; idempotent (même `id` → même vente, pas de doublon). |
 | GET     | `/api/sales` | Historique avec `paymentMethod` (`CASH`/`CREDIT`) et `cashierName`. |
 | GET     | `/api/products` | Produits actifs (`?all=true` réservé OWNER). |
+
+### Endpoints crédits (`/api/credits`)
+
+`src/routes/credits.js` (monté dans `src/index.js`). Toutes les routes
+exigent un jeton valide (`authenticate`). Les montants sont des entiers
+en **millimes > 0** côté requête, **jamais** de flottant.
+
+| Méthode | Route                        | Corps / paramètres | Accès | Détails |
+|---------|------------------------------|--------------------|-------|---------|
+| GET     | `/customers`                 | —                  | OWNER + CASHIER | clients + solde dû (`SUM(credits.amount)`) |
+| GET     | `/customers/:id`            | —                  | OWNER + CASHIER | détail + historique (dette, remboursement, annulation) |
+| POST    | `/customers/:id/validate`   | —                  | **OWNER** | `PENDING → VALIDATED` ; 409 si déjà validé |
+| POST    | `/debts`                     | `{ customerId, amount > 0, note?, id (uuid) }` | **OWNER** | dette manuelle sans vente (`sale_id NULL`, `amount > 0`) ; client `VALIDATED` requis (409) ; idempotent via `id` |
+| POST    | `/repayments`               | `{ customerId, amount > 0, note?, id (uuid) }` | OWNER + CASHIER | stocké **négatif** (`amount < 0`, `sale_id NULL`) ; 409 si `amount > solde dû` ou solde ≤ 0 ; idempotent via `id` |
+
+**Impact sur le montant attendu** : `computeExpected` additionne
+`credits.amount < 0` (remboursements) comme **entrées d'espèces** dans la
+caisse. Un remboursement augmente donc le montant attendu dès son
+enregistrement — c'est la seule écriture `credits` qui compte dans la
+caisse (les dettes, `amount > 0`, en sont exclues). Le détail par
+créditeur est exposé par `GET /api/cash-register/repayments`.
 
 ## Frontend
 
@@ -178,7 +212,11 @@ la requête.
      **Montant initial / + Ventes en espèces (N) / + Remboursements de
      crédit (N) / + Argent ajouté / - Argent retiré** (les deux dernières
      seulement si non nulles — les lignes somment au total), note
-     « Les ventes à crédit ne sont pas comptées ». Chaque clic recalcule
+     « Les ventes à crédit ne sont pas comptées ». Quand
+     `repaymentsCount > 0`, un bloc « Remboursements de crédit » liste
+     chaque remboursement (créditeur, date, enregistreur, montant) via
+     `GET /api/cash-register/repayments?from=<initializedAt>` — **même
+     période que le total** (depuis l'initialisation). Chaque clic recalcule
      à l'heure serveur (pas de polling). Pendant le calcul : bouton
      désactivé « Calcul en cours... » ; en cas d'erreur : message
      français + « Réessayer ».
@@ -221,11 +259,16 @@ la requête.
   (« bientôt disponible »).
 - Historique des ventes : affiche `paymentMethod` (Espèces / Crédit) et
   le nom du caissier.
+- Page `/owner/credits` (`src/pages/CreditManagement.js`) : **Gestion des
+  crédits** (données réelles via `/api/credits`). OWNER valide les
+  clients, ajoute des dettes et rembourse ; CASHIER consulte et enregistre
+  des remboursements. Le lien « Crédits » apparaît dans la nav pour
+  CASHIER et OWNER (`src/components/AppShell.js`).
 
 ## Tests
 
 ```bash
-# 1. Migrer la base (schema.sql + migrations 001 + 002)
+# 1. Migrer la base (schema.sql + migrations 001..006)
 # 2. Démarrer le backend :  cd backend && npm run dev
 # 3. Tests unitaires validateurs backend :
 cd backend && node scripts/test-validators.js
@@ -233,9 +276,12 @@ cd backend && node scripts/test-validators.js
 cd frontend && set CI=true&& npm test -- --watchAll=false --testPathPattern=money
 # 5. Tests statiques frontend (UI caisse) :
 cd backend && node scripts/test-frontend-cash.js
-# 6. Tests d'intégration :
+# 6. Tests d'intégration caisse :
 cd backend
 DATABASE_URL="postgresql://..." JWT_SECRET="..." node scripts/test-cash-register.js
+# 7. Tests d'intégration crédits (dettes, remboursements, validation client) :
+cd backend
+DATABASE_URL="postgresql://..." JWT_SECRET="..." node scripts/test-credits.js
 ```
 
 Le script d'intégration couvre : **date d'initialisation automatique**
@@ -251,6 +297,14 @@ lettre ni chiffre, trop longue → 400), **retraits parallèles** (verrou
 consultatif : un 201, un 409, solde final exact), boutique non
 initialisée → 409, idempotence de `POST /api/sales`.
 
+`test-credits.js` couvre : validation client (CASHIER 403, OWNER OK,
+double validation 409), dette manuelle (CASHIER 403, OWNER 201,
+idempotence), remboursement (CASHIER 201 stocké en négatif, dépassement
+du solde 409, idempotence, solde restant exact), liste + détail client, et
+**impact caisse** : `computeExpected` inclut le remboursement dans
+`cashRepayments`/`repaymentsCount` et dans `expectedAmount`, et
+`listRepayments` renvoie le nom du créditeur.
+
 Chaque exécution crée des boutiques de test uniques (les tables
 financières étant append-only, aucun nettoyage n'est possible). Aucune
 boutique réelle n'est touchée.
@@ -259,11 +313,15 @@ boutique réelle n'est touchée.
 
 - Le login/émission de JWT est hors périmètre : sans jeton stocké sous
   `sg_token`, l'interface affiche « Authentification requise ».
-- Les ventes à crédit (client + code personnel) ne sont pas implémentées.
+- Les ventes à crédit (client + code personnel) ne sont pas implémentées :
+  la gestion des crédits se fait par **dette manuelle** (`POST
+  /api/credits/debts`) et **remboursement** (`POST /api/credits/repayments`),
+  pas encore via le tunnel de vente à crédit.
 - Les remboursements `CASH_REFUND` n'ont pas d'endpoint manuel (module
   retours hors périmètre) ; la table et les contraintes sont prêtes.
-- `credits` : seuls les `amount < 0` (remboursements) comptent, conformément
-  à la formule ; les contre-passations (`reverses_id`) ne sont pas encore
-  gérées (module crédits non implémenté).
+- `credits` : seuls les `amount < 0` (remboursements) comptent dans le
+  montant attendu, conformément à la formule ; les contre-passations
+  (`reverses_id`) sont prévues par le CHECK mais pas encore gérées par
+  l'API.
 - Les endpoints `GET /movements` et `GET /verifications` restent
   disponibles pour l'API mais ne sont plus affichés dans l'interface.
