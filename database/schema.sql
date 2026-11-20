@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS shops (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name        text NOT NULL CHECK (length(btrim(name)) > 0),
   code        text NOT NULL UNIQUE CHECK (code ~ '^[A-Z0-9]{6,12}$'),
+  -- Email de notification (migration 011) : PAS un email de connexion.
+  notification_email text
+    CHECK (notification_email IS NULL OR notification_email ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'),
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
@@ -80,7 +83,9 @@ CREATE TABLE IF NOT EXISTS customers (
   family_name         text NOT NULL CHECK (length(btrim(family_name)) > 0),
   phone               text NOT NULL CHECK (phone ~ '^[0-9]{8}$'),
   cin                 text NOT NULL CHECK (cin ~ '^[0-9]{8}$'),
-  pin_hash            text NOT NULL,
+  cin_photo_path      text,                                        -- migration 012
+  cin_consent_at      timestamptz,                                 -- migration 012
+  pin_hash            text,                                        -- migration 012 (n'est plus obligatoire)
   status              customer_status NOT NULL DEFAULT 'PENDING',
   created_by          uuid NOT NULL REFERENCES app_users(id),
   validated_by        uuid REFERENCES app_users(id),
@@ -197,6 +202,25 @@ CREATE TABLE IF NOT EXISTS credits (
 CREATE INDEX IF NOT EXISTS credits_customer_idx ON credits (customer_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS credits_sale_uq     ON credits (sale_id)     WHERE sale_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS credits_reverses_uq ON credits (reverses_id) WHERE reverses_id IS NOT NULL;
+
+-- Migration 013 : file d'attente des notifications (outbox, non append-only).
+CREATE TABLE IF NOT EXISTS notification_outbox (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  shop_id     uuid NOT NULL REFERENCES shops(id),
+  type        text NOT NULL,
+  payload     jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status      text NOT NULL DEFAULT 'pending'
+              CHECK (status IN ('pending', 'sent', 'failed')),
+  attempts    smallint NOT NULL DEFAULT 0,
+  last_error  text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  sent_at     timestamptz
+);
+CREATE INDEX IF NOT EXISTS notification_outbox_shop_idx
+  ON notification_outbox (shop_id, created_at);
+CREATE INDEX IF NOT EXISTS notification_outbox_retry_idx
+  ON notification_outbox (status, created_at)
+  WHERE status IN ('pending', 'failed');
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

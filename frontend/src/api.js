@@ -46,12 +46,26 @@ export async function apiFetch(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(fetchOptions.headers || {}) };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  return handleResponse(path, "/api" + path, fetchOptions, headers, authRedirect);
+}
 
+// Upload multipart (photo CIN) : NE fixe PAS Content-Type, le navigateur
+// ajoute la frontière multipart/form-data. Même gestion d'erreurs que
+// apiFetch (message français du serveur, redirection 401).
+export async function apiUpload(path, formData, options = {}) {
+  const { authRedirect = true, ...fetchOptions } = options;
+  const headers = { ...(fetchOptions.headers || {}) };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return handleResponse(path, "/api" + path, { method: "POST", ...fetchOptions, body: formData }, headers, authRedirect);
+}
+
+// Envoie la requête et normalise la réponse / les erreurs.
+async function handleResponse(path, url, fetchOptions, headers, authRedirect) {
   let res;
   try {
-    res = await fetch(`/api${path}`, { ...fetchOptions, headers });
+    res = await fetch(url, { ...fetchOptions, headers });
   } catch (networkErr) {
-    // Erreur réseau / service injoignable : message lisible, détail en console.
     console.error(`[api] réseau ${path}:`, networkErr);
     const err = new Error("Le service est indisponible, réessayez.");
     err.status = 0;
@@ -62,12 +76,10 @@ export async function apiFetch(path, options = {}) {
   try {
     data = await res.json();
   } catch {
-    /* réponse sans corps JSON (ex. index.html du serveur de dev) */
     console.error(`[api] réponse non-JSON ${res.status} pour ${path}`);
   }
 
   if (!res.ok) {
-    // Session expirée / jeton invalide : retour à l'écran de connexion.
     if (res.status === 401 && authRedirect) {
       setToken(null);
       if (window.location.pathname !== "/") window.location.assign("/");
@@ -77,8 +89,6 @@ export async function apiFetch(path, options = {}) {
     err.data = data;
     throw err;
   }
-  // Garde-fou : une réponse 200 non-JSON (proxy absent) ne doit pas
-  // être interprétée comme une donnée métier.
   if (data === null) {
     console.error(`[api] corps vide pour ${path}`);
     const err = new Error("Le service est indisponible, réessayez.");

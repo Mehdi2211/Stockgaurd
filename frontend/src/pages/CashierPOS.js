@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import AppShell from "../components/AppShell";
 import ScanPanel from "../components/ScanPanel";
+import CreditCheckout from "../components/CreditCheckout";
 import { useToast } from "../context/KioskContext";
 import { apiFetch } from "../api";
 
@@ -15,6 +16,7 @@ export default function CashierPOS() {
   const [query,    setQuery]    = useState("");
   const [cart,     setCart]     = useState(new Map());
   const [selling,  setSelling]  = useState(false);
+  const [creditOpen, setCreditOpen] = useState(false);
   // Identifiant de vente généré une fois par panier : une nouvelle
   // tentative après échec réutilise le même id (idempotence serveur).
   const saleIdRef  = useRef(null);
@@ -98,7 +100,41 @@ export default function CashierPOS() {
 
   const handleCredit = () => {
     if (!cart.size) { toast("Le panier est vide."); return; }
-    toast("Vente à crédit : bientôt disponible.");
+    if (selling) return;
+    setCreditOpen(true);
+  };
+
+  // Confirmation de la vente à crédit : le serveur crée la vente ET la
+  // dette dans UNE transaction. Si la dette est refusée (plafond), rien
+  // n'est enregistré et la modale reste ouverte pour choisir un autre
+  // créditeur.
+  const confirmCredit = async (customerId) => {
+    if (!cart.size || selling) return;
+    if (!saleIdRef.current) saleIdRef.current = crypto.randomUUID();
+    setSelling(true);
+    try {
+      await apiFetch("/sales", {
+        method: "POST",
+        body: JSON.stringify({
+          id: saleIdRef.current,
+          customerId,
+          lines: [...cart.values()].map(({ product, qty }) => ({
+            productId: product.id,
+            quantity: qty,
+          })),
+        }),
+      });
+      toast("Vente à crédit enregistrée ✓");
+      setCart(new Map());
+      saleIdRef.current = null;
+      setQuery("");
+      setCreditOpen(false);
+    } catch (err) {
+      // Panier conservé : nouvelle tentative avec le même id de vente.
+      toast(err.message || "Erreur lors de l'enregistrement de la vente à crédit.");
+    } finally {
+      setSelling(false);
+    }
   };
 
   return (
@@ -172,15 +208,23 @@ export default function CashierPOS() {
 
           <div className="pay-grid">
             <button className="btn-pay" onClick={handleCash} disabled={selling}>
-              {selling ? "Enregistrement…" : "Espèces"}
+              {selling && !creditOpen ? "Enregistrement…" : "Espèces"}
             </button>
-            <button className="btn-pay alt" onClick={handleCredit} disabled
-              title="Bientôt disponible">
-              Crédit (bientôt disponible)
+            <button className="btn-pay alt" onClick={handleCredit} disabled={selling || !cart.size}>
+              Crédit
             </button>
           </div>
         </div>
       </div>
+
+      {creditOpen && (
+        <CreditCheckout
+          total={cartTotal}
+          busy={selling}
+          onClose={() => setCreditOpen(false)}
+          onConfirm={confirmCredit}
+        />
+      )}
     </AppShell>
   );
 }

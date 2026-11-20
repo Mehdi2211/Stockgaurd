@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useKiosk } from "../context/KioskContext";
 import AdminPinModal from "./AdminPinModal";
+import NotificationEmailModal from "./NotificationEmailModal";
 
 
 export default function AppShell({ children }) {
@@ -47,6 +48,7 @@ export default function AppShell({ children }) {
               <NavLink to="/owner/stock"    className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>Stock</NavLink>
               <NavLink to="/owner/ventes"   className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>Ventes</NavLink>
               <NavLink to="/owner/cash-register" className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>Caisse</NavLink>
+              <NavLink to="/owner/parametres"    className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>Paramètres</NavLink>
               <NavLink to="/owner" end      className={({ isActive }) => isActive ? "nav-btn active" : "nav-btn"}>Tableau de bord</NavLink>
             </>
           )}
@@ -78,6 +80,9 @@ export default function AppShell({ children }) {
 
       {/* PIN modal */}
       {showPinModal && <AdminPinModal onClose={() => setShowPinModal(false)} />}
+
+      {/* Modale post-connexion OWNER : email de notification manquant */}
+      {role === "OWNER" && <NotificationEmailModal />}
     </div>
   );
 }

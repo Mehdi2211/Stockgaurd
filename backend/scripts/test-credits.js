@@ -72,8 +72,9 @@ async function loginCashier(shopId) {
     `INSERT INTO app_users (shop_id, name, role, pin_hash) VALUES ($1,'Caissier Test','CASHIER',$2) RETURNING id`,
     [shop.id, await bcrypt.hash(TEST_PIN, 8)])).rows[0];
   const customer = (await pool.query(
-    `INSERT INTO customers (shop_id, first_name, family_name, phone, cin, pin_hash, status, created_by)
-     VALUES ($1,'Ali','Test','12345678','12345678','x','PENDING',$2) RETURNING id`, [shop.id, owner.id])).rows[0];
+    `INSERT INTO customers (shop_id, first_name, family_name, phone, cin, cin_photo_path, cin_consent_at, pin_hash, status, created_by)
+     VALUES ($1,'Ali','Test','12345678','12345678',$2,now(),'x','PENDING',$3) RETURNING id`,
+    [shop.id, `${shop.id}/test-cin.jpg`, owner.id])).rows[0];
 
   const ownerTok = await loginOwner(shop.id);
   const cashierTok = await loginCashier(shop.id);

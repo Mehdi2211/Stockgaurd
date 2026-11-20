@@ -70,7 +70,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   font-size: 1.1rem;
   cursor: pointer;
 }
-.btn-primary:disabled { opacity: .6; cursor: wait; }
+.btn-primary:disabled { opacity: .6; cursor: not-allowed; }
 .btn-primary:hover:not(:disabled) { opacity: .92; }
 
 .btn-ghost {
@@ -763,5 +763,134 @@ label.sg-label { display: block; font-weight: 600; margin: 0 0 6px; }
   display: flex;
   gap: 10px;
   margin-top: 20px;
+}
+
+/* Modale large (sélecteur de crédité / formulaires) */
+.modal-box-wide {
+  max-width: 620px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+/* ── Sélecteur de créditeur (paiement à crédit) ── */
+.credit-selector-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.credit-selector-toolbar .sg-input { flex: 1; }
+.credit-selector-toolbar .btn-ghost { flex-shrink: 0; white-space: nowrap; }
+
+.credit-picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.credit-picker-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .12s, background .12s;
+}
+.credit-picker-row:hover:not(:disabled) { border-color: var(--brand); background: var(--soft); }
+.credit-picker-row:disabled { opacity: .55; cursor: not-allowed; }
+
+.credit-picker-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.credit-picker-balance { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
+
+.credit-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+.credit-pagination .btn-ghost:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Aperçu photo CIN */
+.cin-preview {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+.cin-preview img {
+  max-width: 100%;
+  max-height: 220px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
+/* Entrée du sélecteur : ligne + bouton « Reprendre la photo » éventuel */
+.credit-picker-item { display: flex; flex-direction: column; }
+.credit-recapture {
+  align-self: flex-start;
+  margin: 4px 0 6px;
+  padding: 6px 12px;
+  font-size: .85rem;
+}
+
+/* Image CIN affichée dans la modale OWNER (URL signée éphémère) */
+.cin-preview-img {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  margin: 0 auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
+/* Case de consentement */
+.consent-box {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.consent-label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: .9rem;
+  cursor: pointer;
+}
+.consent-label input { margin-top: 3px; flex-shrink: 0; }
+
+/* Bandeau notification_email manquant (OWNER) */
+.settings-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: #fff3e0;
+  border: 1px solid #f0c48a;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-weight: 600;
+  color: #8a4b00;
+}
+
+.settings-form { max-width: 520px; }
+
+@media (max-width: 640px) {
+  .credit-selector-toolbar { flex-direction: column; align-items: stretch; }
 }
 

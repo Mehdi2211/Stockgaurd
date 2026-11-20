@@ -1,29 +1,45 @@
 const express = require("express");
 const { authenticate } = require("../middleware/auth");
+const { creditLimitMillimes } = require("../constants/credit");
 
 const router = express.Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function formatDT(millimes) {
+  const n = Number(millimes) || 0;
+  const abs = Math.abs(n);
+  return `${n < 0 ? "-" : ""}${Math.floor(abs / 1000)},${String(abs % 1000).padStart(3, "0")} DT`;
+}
+
 // ---------------------------------------------------------------------
 // POST /api/sales — OWNER ou CASHIER
-// Body : { id: uuid (client_sale_id), lines: [{ productId, quantity }] }
+// Body : { id: uuid (client_sale_id), lines: [{ productId, quantity }],
+//          customerId?: uuid }
 // Le serveur recalcule les prix et le total depuis la base ; tout prix
 // ou total envoyé par le client est ignoré. Idempotent via
 // (shop_id, client_sale_id) : une reprise avec le même id ne crée pas
 // de seconde vente. Les mouvements de stock sont insérés dans la même
 // transaction (pas de trigger en base pour l'instant).
-// customer_id reste NULL => vente en espèces (paiement dérivé).
+//   - customerId absent  => vente en espèces (customer_id NULL).
+//   - customerId présent => vente à CRÉDIT : la vente ET la ligne
+//     `credits` liée au sale_id sont créées dans UNE SEULE transaction.
+//     Le solde du créditeur ne peut dépasser CREDIT_LIMIT : sinon 409 et
+//     RIEN n'est enregistré (ni vente, ni stock, ni crédit).
 // ---------------------------------------------------------------------
 router.post("/", authenticate, async (req, res) => {
   const clientSaleId = req.body?.id;
   const rawLines = req.body?.lines;
+  const customerId = req.body?.customerId;
 
   if (typeof clientSaleId !== "string" || !UUID_RE.test(clientSaleId)) {
     return res.status(400).json({ error: "Identifiant de vente invalide (UUID attendu)." });
   }
   if (!Array.isArray(rawLines) || rawLines.length === 0 || rawLines.length > 200) {
     return res.status(400).json({ error: "Le panier doit contenir entre 1 et 200 lignes." });
+  }
+  if (customerId != null && (typeof customerId !== "string" || !UUID_RE.test(customerId))) {
+    return res.status(400).json({ error: "Identifiant créditeur invalide." });
   }
 
   // Fusionne les produits répétés et valide les quantités.
@@ -73,13 +89,51 @@ router.post("/", authenticate, async (req, res) => {
       return res.status(400).json({ error: "Le total de la vente doit être positif." });
     }
 
+    // Vente à crédit : contrôle du créditeur et du plafond AVANT toute
+    // écriture. Le verrou sérialise deux ventes simultanées du même
+    // créditeur (le total des deux ne peut pas dépasser le plafond).
+    if (customerId) {
+      const { rows: cust } = await client.query(
+        `SELECT id, status, cin_photo_path FROM customers
+          WHERE shop_id = $1 AND id = $2 FOR UPDATE`,
+        [req.user.shopId, customerId]
+      );
+      if (cust.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Créditeur introuvable." });
+      }
+      if (cust[0].status !== "VALIDATED") {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "Ce créditeur doit être validé avant une vente à crédit." });
+      }
+      if (!cust[0].cin_photo_path) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "Photo de CIN manquante : reprenez la photo du créditeur avant une vente à crédit." });
+      }
+
+      const { rows: bal } = await client.query(
+        `SELECT COALESCE(SUM(amount), 0)::bigint AS balance
+           FROM credits WHERE shop_id = $1 AND customer_id = $2`,
+        [req.user.shopId, customerId]
+      );
+      const balance = Number(bal[0].balance);
+      const limit = creditLimitMillimes();
+      if (balance + total > limit) {
+        await client.query("ROLLBACK");
+        const available = Math.max(0, limit - balance);
+        return res.status(409).json({
+          error: `Plafond de crédit dépassé. Solde actuel : ${formatDT(balance)}, disponible : ${formatDT(available)}.`,
+        });
+      }
+    }
+
     // Insert idempotent : en cas de conflit, on renvoie la vente existante.
     const { rows: inserted } = await client.query(
       `INSERT INTO sales (shop_id, client_sale_id, cashier_id, customer_id, total)
-       VALUES ($1, $2, $3, NULL, $4)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (shop_id, client_sale_id) DO NOTHING
        RETURNING *`,
-      [req.user.shopId, clientSaleId, req.user.userId, total]
+      [req.user.shopId, clientSaleId, req.user.userId, customerId || null, total]
     );
 
     let sale = inserted[0];
@@ -113,8 +167,23 @@ router.post("/", authenticate, async (req, res) => {
       );
     }
 
+    // Vente à crédit : dette liée à la vente (sale_id) dans la MÊME
+    // transaction. Une vente à crédit n'entre PAS dans le montant attendu
+    // de caisse (seuls les remboursements y entrent).
+    if (customerId) {
+      await client.query(
+        `INSERT INTO credits (shop_id, customer_id, sale_id, amount, note, recorded_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [req.user.shopId, customerId, sale.id, total, "Vente à crédit", req.user.userId]
+      );
+    }
+
     await client.query("COMMIT");
-    res.status(201).json({ sale, lines: await fetchLines(client, sale.id) });
+    res.status(201).json({
+      sale,
+      paymentMethod: customerId ? "CREDIT" : "CASH",
+      lines: await fetchLines(client, sale.id),
+    });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     console.error("[sales] POST:", err);

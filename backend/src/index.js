@@ -27,6 +27,8 @@ const stockRoutes    = require("./routes/stock");
 const ownerRoutes    = require("./routes/owner");
 const cashRoutes     = require("./routes/cashRegister");
 const creditRoutes   = require("./routes/credits");
+const outbox         = require("./services/outbox");
+const mailer         = require("./services/mailer");
 
 const app  = express();
 const PORT = process.env.PORT || 4000;
@@ -67,4 +69,16 @@ app.use((err, _req, res, _next) => {
   res.status(err.status || 500).json({ error: "Erreur interne du serveur." });
 });
 
-app.listen(PORT, () => console.log(`StockGuard backend : http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`StockGuard backend : http://localhost:${PORT}`);
+  // Avertissement clair (non bloquant) si le SMTP n'est pas configuré :
+  // les notifications de création de profil resteront dans l'outbox.
+  if (!mailer.isConfigured()) {
+    console.warn(
+      "[mail] SMTP non configuré : les emails de notification ne seront pas " +
+      "envoyés (définir SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/MAIL_FROM)."
+    );
+  }
+  // Worker de l'outbox : reprend les notifications en attente/échouées.
+  outbox.startWorker();
+});

@@ -45,12 +45,15 @@ export default function CreditManagement() {
   const [repayAmt, setRepayAmt] = useState("");
   const [addAmt, setAddAmt] = useState("");
   const [busy, setBusy] = useState(false);
+  const [cinUrl, setCinUrl] = useState("");       // URL signée (OWNER, éphémère)
+  const [cinBusy, setCinBusy] = useState(false);
 
   const loadCustomers = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const data = await apiFetch("/credits/customers");
+      // limit=200 = maximum accepté par l'API (filtrage/tri côté client).
+      const data = await apiFetch("/credits/customers?limit=200");
       setCustomers(data.customers || []);
     } catch (err) {
       setError(err.message || "Le service est indisponible, réessayez.");
@@ -79,7 +82,41 @@ export default function CreditManagement() {
     setHistory([]);
     setRepayAmt("");
     setAddAmt("");
+    setCinUrl("");
     loadDetail(c.id);
+  };
+
+  // OWNER uniquement : URL SIGNÉE à courte durée (60 s) pour consulter la
+  // photo de la CIN. Le caissier n'y a jamais accès (403 côté serveur).
+  const viewCin = async () => {
+    if (!selected) return;
+    setCinBusy(true);
+    try {
+      const data = await apiFetch(`/credits/customers/${selected.id}/cin`);
+      setCinUrl(data.url);
+    } catch (err) {
+      toast(err.message || "Impossible d'afficher la photo de la CIN.");
+    } finally {
+      setCinBusy(false);
+    }
+  };
+
+  // OWNER uniquement : supprime définitivement la photo (bucket + chemin NULL).
+  // À proposer en priorité quand le solde est à 0 (durée de conservation).
+  const deleteCin = async () => {
+    if (!selected) return;
+    if (!window.confirm("Supprimer définitivement la photo de la CIN de ce créditeur ?")) return;
+    setCinBusy(true);
+    try {
+      await apiFetch(`/credits/customers/${selected.id}/cin`, { method: "DELETE" });
+      toast("Photo de la CIN supprimée ✓");
+      setCinUrl("");
+      refresh();
+    } catch (err) {
+      toast(err.message || "Erreur lors de la suppression de la CIN.");
+    } finally {
+      setCinBusy(false);
+    }
   };
 
   const refresh = () => {
@@ -262,6 +299,39 @@ export default function CreditManagement() {
                   </span>
                 </div>
 
+                {/* Photo de la CIN — OWNER uniquement (donnée personnelle sensible) */}
+                {isOwner && (
+                  <div className="detail-section">
+                    <h3 className="section-title">Photo de la CIN</h3>
+                    {selected.hasCin ? (
+                      <>
+                        <p className="hint" style={{ marginBottom: 10 }}>
+                          Photo conservée de façon sécurisée. Consultation via un lien signé valable 60 secondes.
+                          {selected.balance === 0 && " Le solde étant soldé, sa suppression est recommandée."}
+                        </p>
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          <button className="btn-ghost" onClick={viewCin} disabled={cinBusy}>
+                            Voir la CIN
+                          </button>
+                          <button
+                            className="btn-ghost"
+                            style={{ borderColor: "var(--warn)", color: "var(--warn)" }}
+                            onClick={deleteCin}
+                            disabled={cinBusy}
+                          >
+                            Supprimer la CIN
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="hint">
+                        Aucune photo conservée. Pour accorder une nouvelle dette, le caissier doit
+                        d&apos;abord reprendre la photo de la CIN.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {selected.status === "VALIDATED" && (
                   <>
                     {/* Add debt (OWNER uniquement) */}
@@ -349,6 +419,23 @@ export default function CreditManagement() {
 
         </div>
       </div>
+
+      {/* Consultation de la CIN (OWNER) via l'URL signée — jamais dans la liste */}
+      {cinUrl && (
+        <div className="modal-backdrop" onClick={() => setCinUrl("")}>
+          <div className="modal-box modal-box-wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">Photo de la CIN</h2>
+              <button className="modal-close" onClick={() => setCinUrl("")} aria-label="Fermer">✕</button>
+            </div>
+            <p className="modal-hint">Lien signé éphémère (60 s). Ne pas partager ni capturer.</p>
+            <img className="cin-preview-img" src={cinUrl} alt="Photo de la CIN du créditeur" />
+            <div className="modal-actions">
+              <button className="btn-ghost" style={{ flex: 1 }} onClick={() => setCinUrl("")}>Fermer</button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }
