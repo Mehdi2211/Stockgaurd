@@ -1,31 +1,27 @@
 # StockGuard
 
-Application de gestion de boutique (kiosque) : produits, stock, ventes
-(POS), suivi de caisse et gestion des crédits clients.
+Application de gestion de boutique (kiosque) : produits, stock, ventes (POS),
+caisse et crédits clients.
 
 - **Backend** : Node.js / Express + PostgreSQL (Supabase), JWT.
 - **Frontend** : React (Create React App).
-- **Monnaie** : montants stockés en **millimes** (`bigint`, 1 DT = 1000),
-  jamais en flottant.
+- **Monnaie** : montants en **millimes** (`bigint`, 1 DT = 1000), jamais en flottant.
 
-Toutes les données (utilisateurs, boutiques, produits, stock, ventes,
-crédits, scans) sont lues et écrites en **base de données** : aucun mock,
-aucune donnée de démonstration en dur, aucun JWT fabriqué à la main.
+Tout est lu/écrit en base : aucun mock, aucune donnée en dur, aucun JWT fabriqué à la main.
 
 ## Structure
 
 ```
-backend/     API Express (routes, services, middleware, scripts)
-  src/db.js        gestionnaire de pools pg (un pool par base de boutique)
-  src/routes/      auth, shop, kiosk, products, scans, sales,
-                   customers, stock, owner, cashRegister, credits
-  src/middleware/  auth.js (requireAuth, requireRole + alias)
-  shops.json       registre multi-boutique : code → URL de base (non versionné)
-  shop-credentials.csv  PIN admin/caissier par boutique (non versionné, privé)
+backend/     API Express (routes, middleware, scripts)
+  src/db.js        pools pg (un pool par base de boutique)
+  src/routes/      auth, shop, products, scans, sales, customers,
+                   stock, owner, cashRegister, credits
+  src/middleware/  auth.js (requireAuth, requireRole)
+  shops.json             registre multi-boutique code → URL (non versionné)
+  shop-credentials.csv   PIN admin/caissier par boutique (non versionné)
 frontend/    React (pages, composants, context, hooks, utils)
 database/    schema.sql + migrations SQL (001..010)
-docs/        documentation fonctionnelle (voir docs/cash-register.md)
-.kiro/       specs Kiro (cash-register-monitoring)
+docs/        documentation fonctionnelle
 ```
 
 ## Démarrage
@@ -45,156 +41,98 @@ npm start                 # http://localhost:3000 (proxy -> :4000)
 
 ### Variables d'environnement (`backend/.env`)
 
-| Variable         | Rôle                                                        |
-|------------------|-------------------------------------------------------------|
-| `DATABASE_URL`   | Chaîne de connexion PostgreSQL (Supabase). Base par défaut. |
-| `PORT`           | Port d'écoute de l'API (défaut `4000`).                     |
-| `FRONTEND_URL`   | Origine autorisée (CORS).                                   |
-| `BCRYPT_ROUNDS`  | Coût du hachage bcrypt (défaut `12`).                       |
-| `JWT_SECRET`     | **Secret de signature des JWT (jamais en dur).**            |
-| `JWT_EXPIRES_IN` | Durée de vie des jetons (défaut `12h`).                     |
-| `PGSSL`          | `require` pour forcer SSL (Supabase) ; vide en local.       |
-| `SHOPS_CONFIG`   | Chemin du registre (défaut `backend/shops.json`).           |
+| Variable | Rôle |
+|----------|------|
+| `DATABASE_URL` | Chaîne de connexion PostgreSQL (Supabase) ; base par défaut. |
+| `PORT` | Port de l'API (défaut `4000`). |
+| `FRONTEND_URL` | Origine autorisée (CORS). |
+| `BCRYPT_ROUNDS` | Coût bcrypt (défaut `12`). |
+| `JWT_SECRET` | **Secret de signature des JWT (jamais en dur).** |
+| `JWT_EXPIRES_IN` | Durée de vie des jetons (défaut `12h`). |
+| `PGSSL` | `require` pour forcer SSL (Supabase). |
+| `SHOPS_CONFIG` | Chemin du registre (défaut `backend/shops.json`). |
 
 ## Multi-boutique (un serveur, N bases)
 
-Chaque kiosque possède **son code boutique** et **sa base de données**. Le
-code saisi au login détermine la base sur laquelle l'application travaille :
-un même serveur peut héberger plusieurs boutiques (bases distinctes).
+Chaque kiosque a **son code** et **sa base** ; le code saisi au login choisit la base.
 
-- Le mapping `code → URL de base` vit dans `backend/shops.json` (non
-  versionné, édité à chaque vente / ajout de client) :
-
+- Le mapping `code → URL` vit dans `backend/shops.json` (non versionné) :
   ```json
-  {
-    "HK221105": { "name": "Kiosque Chez Ali", "databaseUrl": "postgres://..." },
-    "OTHER123": "postgres://..."
-  }
+  { "HK221105": { "name": "Kiosque Chez Ali", "databaseUrl": "postgres://..." } }
   ```
-
-- `src/db.js` résout le code en URL, crée **un pool `pg` par base** (mis en
-  cache) et le réutilise.
-- `POST /api/auth/login` interroge la base du code ; le JWT porte le
-  `shopCode`. Le middleware `requireAuth` attache `req.db` (la base du
-  code) et **toutes les routes utilisent `req.db`**.
-- Si un code est **absent du registre**, on retombe sur `DATABASE_URL`
-  (mode mono-boutique, développement et tests).
+- `src/db.js` résout le code et met en cache **un pool `pg` par base**.
+- Le login interroge la base du code ; le JWT porte le `shopCode` ; `requireAuth`
+  attache `req.db` et **toutes les routes utilisent `req.db`**.
+- Code absent du registre → repli sur `DATABASE_URL` (mode mono-boutique, dev/tests).
+- **Isolation logique** : au sein d'une base, chaque table métier filtre par
+  `shop_id` (issu du jeton, jamais du client).
 
 ## Base de données
-
-Appliquer le schéma puis les migrations (idempotentes) :
 
 ```bash
 cd backend
 node scripts/apply-schema.js
+# migrations idempotentes 001, 002, 003, 004, 006, 007, 008, 009, 010
 node scripts/apply-migration.js 001_cash_register.sql
-node scripts/apply-migration.js 002_cash_register_init_date.sql
-node scripts/apply-migration.js 003_cash_register_reinit.sql
-node scripts/apply-migration.js 004_credits_repayments.sql
-node scripts/apply-migration.js 006_manual_credits.sql
-node scripts/apply-migration.js 007_auth_and_shop_scope.sql
-node scripts/apply-migration.js 008_products_and_scans.sql
-node scripts/apply-migration.js 009_products_category_buyprice.sql
 node scripts/apply-migration.js 010_owner_pin_and_google.sql
-# 005 = revert de 004 (à lancer manuellement, non exécuté par défaut)
+# 005 = revert de 004 (manuel)
 ```
 
-Rôle des migrations :
+- `001..006` — caisse + crédits append-only.
+- `007` isolation `shop_id` · `008` `product_scans` · `009` `category`/`buy_price` · `010` login owner par PIN.
 
-- `001..006` — caisse (montant attendu, initialisation, réinitialisation),
-  crédits append-only et dettes manuelles.
-- `007_auth_and_shop_scope.sql` — `shops.owner_user_id`, isolation
-  `shop_id` sur `sale_lines`, index `(shop_id, lower(email))`,
-  contrainte de cohérence des identifiants.
-- `008_products_and_scans.sql` — `products.updated_at` + table journal
-  `product_scans` (index période / code-barres / utilisateur / vente).
-- `009_products_category_buyprice.sql` — `products.category` et
-  `products.buy_price` (colonnes optionnelles, additif).
-- `010_owner_pin_and_google.sql` — login propriétaire par **PIN**
-  (assouplit la contrainte d'identifiants) ; ajoute `app_users.google_sub`
-  et `email_verified` (réservés aux notifications futures, hors login).
-
-### Réinitialisation complète (développement)
+### Reset (dev)
 
 ```bash
-cd backend
-node scripts/reset-db.js
+node scripts/reset-db.js   # drop exhaustif + schema.sql (transactionnel) — perte totale
 ```
-
-Supprime **toutes** les tables et tous les types enum du schéma `public`
-(drop exhaustif, y compris les tables append-only) puis réapplique
-`database/schema.sql`, le tout dans une seule transaction. À réserver au
-développement : **toutes les données sont perdues**.
 
 ### Provisionnement d'une boutique
 
-La boutique elle-même (code + nom) se crée **directement en base** (table
-`shops`) : il n'y a plus de script de seed boutique. Une fois la boutique
-insérée, `generate-shop-pins.js` crée automatiquement les comptes **OWNER**
-et **CASHIER** manquants, avec des PIN aléatoires hashés bcrypt, et exporte
-un CSV privé :
+La boutique (code + nom) se crée **directement en base** (table `shops`), puis :
 
 ```bash
-cd backend
-node scripts/generate-shop-pins.js             # boutiques sans aucun compte
-node scripts/generate-shop-pins.js --all       # toutes les boutiques
+node scripts/generate-shop-pins.js             # boutiques sans compte
+node scripts/generate-shop-pins.js --all       # toutes
 node scripts/generate-shop-pins.js CODE1 CODE2 # codes ciblés
 ```
 
-Le fichier exporté `backend/shop-credentials.csv` (`code,nom,pin_admin,pin_caissier`)
-est destiné au développeur/distributeur : il contient les PIN à remettre au
-propriétaire et au caissier. Il est **non versionné** (`.gitignore`). Un hash
-bcrypt n'étant pas lisible, un compte déjà existant apparaît en `(existant)`.
+Crée les comptes **OWNER**/**CASHIER** manquants (PIN aléatoires bcrypt) et exporte
+`backend/shop-credentials.csv` (`code,nom,pin_admin,pin_caissier`, non versionné,
+privé développeur). Un compte existant apparaît en `(existant)`.
 
-### Seed (catalogue de démonstration, idempotent)
+### Seed catalogue
 
 ```bash
-cd backend
-# Catalogue de 18 produits d'exemple pour une boutique existante
-node scripts/seed-products.js [CODE_BOUTIQUE]
+node scripts/seed-products.js [CODE_BOUTIQUE]   # 18 produits d'exemple, idempotent
 ```
-
-Le script crée un mouvement de stock `INITIAL` par produit nouvellement
-inséré et est relançable sans risque (aucun doublon). Les produits sont
-cloisonnés par `shop_id` : chaque boutique ne voit que son propre catalogue.
 
 ## Authentification
 
-- `POST /api/auth/login` vérifie les identifiants **dans la base du code
-  boutique** et renvoie un JWT signé (`JWT_SECRET`). L'authentification
-  repose **uniquement sur le PIN** hashé bcrypt (`app_users.pin_hash`).
-  - **OWNER** : `{ code, pin, role: "OWNER" }` (PIN d'administration).
-  - **CASHIER** : `{ code, pin, role: "CASHIER" }` (`role` facultatif :
-    `CASHIER` par défaut).
-  - L'email **n'intervient pas** dans le login ; il est conservé pour
-    l'envoi ultérieur de notifications (`app_users.email`, `email_verified`).
-- Le middleware `requireAuth` valide le JWT et expose
-  `req.user = { userId, shopId, role, shopCode }` ainsi que `req.db` (le
-  pool de la base de la boutique) ; `requireRole("OWNER")` restreint
-  l'accès. **`shop_id`, `user_id`, `role` et `shopCode` viennent
-  uniquement du jeton vérifié**, jamais du body / query / headers.
-- Toutes les requêtes métier sont filtrées par le `shop_id` du jeton
-  (isolation multi-boutique).
-- Frontend : page de login réelle, jeton stocké sous
-  `localStorage["sg_token"]`, `apiFetch` ajoute le header `Authorization`
-  et redirige vers le login sur `401`.
+- `POST /api/auth/login` vérifie les identifiants **dans la base du code** et renvoie
+  un JWT. Auth **par PIN uniquement** (bcrypt, `app_users.pin_hash`) :
+  `{ code, pin, role }`, `role` = `OWNER` (défaut `CASHIER`).
+- L'email ne sert pas au login (réservé aux notifications).
+- `requireAuth` expose `req.user = { userId, shopId, role, shopCode }` + `req.db`.
+  **`shop_id`, `user_id`, `role`, `shopCode` viennent uniquement du jeton vérifié.**
+- Frontend : jeton dans `localStorage["sg_token"]`, `apiFetch` ajoute `Authorization`
+  et redirige sur `401`.
 
 ## Routes principales
 
-| Domaine   | Fichier                         | Routes |
-|-----------|---------------------------------|--------|
-| Auth      | `src/routes/auth.js`            | `POST /api/auth/login` (`{code,pin,role}` ; `role` = OWNER/CASHIER) |
-| Boutique  | `src/routes/shop.js`            | `GET /api/shop/me` |
-| Produits  | `src/routes/products.js`        | `GET /api/products` (paginé + recherche, `?all=true` OWNER), `GET /api/products/:id`, `GET /api/products/barcode/:barcode`, `POST` / `PUT :id` (OWNER) |
-| Scans     | `src/routes/scans.js`           | `POST /api/scans` (journalise, n'affecte ni stock ni caisse), `GET /api/scans` (filtres période/utilisateur/statut, paginé) |
-| Stock     | `src/routes/stock.js`           | `GET /api/stock/movements`, `POST /api/stock/adjustment` (OWNER) |
-| Ventes    | `src/routes/sales.js`           | `POST /api/sales` (idempotent), `GET /api/sales` |
-| Crédits   | `src/routes/credits.js`         | clients, dettes, remboursements, validation |
-| Caisse    | `src/routes/cashRegister.js`    | `GET /expected`, `POST /initialize`, `/reinitialize`, ... (OWNER) |
-| Dashboard | `src/routes/owner.js`           | `GET /api/owner/stats` |
+| Domaine | Routes |
+|---------|--------|
+| Auth | `POST /api/auth/login` |
+| Boutique | `GET /api/shop/me` |
+| Produits | `GET /api/products` (paginé, `?all=true` OWNER), `GET /:id`, `GET /barcode/:barcode`, `POST`/`PUT :id` (OWNER) |
+| Scans | `POST /api/scans`, `GET /api/scans` (journal, n'affecte ni stock ni caisse) |
+| Stock | `GET /api/stock/movements`, `POST /api/stock/adjustment` (OWNER) |
+| Ventes | `POST /api/sales` (idempotent), `GET /api/sales` |
+| Crédits | `/api/credits/*` (clients, dettes, remboursements) |
+| Caisse | `GET /api/cash-register/expected`, `POST /initialize`, `/reinitialize` (OWNER) |
+| Dashboard | `GET /api/owner/stats` |
 
-Détail complet de la caisse et des crédits : voir
-[docs/cash-register.md](docs/cash-register.md).
+Détail caisse/crédits : [docs/cash-register.md](docs/cash-register.md).
 
 ## Tests
 
@@ -202,21 +140,11 @@ Détail complet de la caisse et des crédits : voir
 cd backend
 node scripts/test-validators.js           # validateurs
 node scripts/test-frontend-cash.js        # UI caisse (statique)
-node scripts/test-cash-register.js        # intégration caisse (backend démarré)
-node scripts/test-cash-register-v2.js     # intégration caisse (variante, login réel)
-node scripts/test-credits.js              # intégration crédits (backend démarré)
-node scripts/test-auth-products-scans.js  # auth, boutique, produits, scans, stock,
-                                          # dashboard, isolation shop_id
+node scripts/test-cash-register.js        # caisse (backend démarré)
+node scripts/test-credits.js              # crédits (backend démarré)
+node scripts/test-auth-products-scans.js  # auth, produits, scans, stock, isolation
 ```
 
-Les scripts d'intégration s'exécutent contre le backend **démarré** et une
-base réelle (DATABASE_URL + JWT_SECRET). Chaque exécution crée des
-boutiques de test uniques ; aucune boutique réelle n'est touchée. Les
-tests se connectent via `POST /api/auth/login` (plus aucun JWT fabriqué à
-la main). Comme ces codes de test ne figurent pas dans `shops.json`, ils
-utilisent la base `DATABASE_URL` par défaut.
-
-## Documentation
-
-- [docs/cash-register.md](docs/cash-register.md) — suivi de caisse et
-  intégration des remboursements de crédit dans le montant attendu.
+Les tests d'intégration tournent contre le backend **démarré** + une base réelle.
+Ils créent des boutiques de test uniques (codes absents de `shops.json` → base
+`DATABASE_URL`) et se connectent via le login réel.
