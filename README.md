@@ -21,6 +21,7 @@ backend/     API Express (routes, services, middleware, scripts)
                    customers, stock, owner, cashRegister, credits
   src/middleware/  auth.js (requireAuth, requireRole + alias)
   shops.json       registre multi-boutique : code → URL de base (non versionné)
+  shop-credentials.csv  PIN admin/caissier par boutique (non versionné, privé)
 frontend/    React (pages, composants, context, hooks, utils)
 database/    schema.sql + migrations SQL (001..010)
 docs/        documentation fonctionnelle (voir docs/cash-register.md)
@@ -113,6 +114,38 @@ Rôle des migrations :
   (assouplit la contrainte d'identifiants) ; ajoute `app_users.google_sub`
   et `email_verified` (réservés aux notifications futures, hors login).
 
+### Réinitialisation complète (développement)
+
+```bash
+cd backend
+node scripts/reset-db.js
+```
+
+Supprime **toutes** les tables et tous les types enum du schéma `public`
+(drop exhaustif, y compris les tables append-only) puis réapplique
+`database/schema.sql`, le tout dans une seule transaction. À réserver au
+développement : **toutes les données sont perdues**.
+
+### Provisionnement d'une boutique
+
+La boutique elle-même (code + nom) se crée **directement en base** (table
+`shops`) : il n'y a plus de script de seed boutique. Une fois la boutique
+insérée, `generate-shop-pins.js` crée automatiquement les comptes **OWNER**
+et **CASHIER** manquants, avec des PIN aléatoires hashés bcrypt, et exporte
+un CSV privé :
+
+```bash
+cd backend
+node scripts/generate-shop-pins.js             # boutiques sans aucun compte
+node scripts/generate-shop-pins.js --all       # toutes les boutiques
+node scripts/generate-shop-pins.js CODE1 CODE2 # codes ciblés
+```
+
+Le fichier exporté `backend/shop-credentials.csv` (`code,nom,pin_admin,pin_caissier`)
+est destiné au développeur/distributeur : il contient les PIN à remettre au
+propriétaire et au caissier. Il est **non versionné** (`.gitignore`). Un hash
+bcrypt n'étant pas lisible, un compte déjà existant apparaît en `(existant)`.
+
 ### Seed (catalogue de démonstration, idempotent)
 
 ```bash
@@ -122,9 +155,8 @@ node scripts/seed-products.js [CODE_BOUTIQUE]
 ```
 
 Le script crée un mouvement de stock `INITIAL` par produit nouvellement
-inséré et est relançable sans risque (aucun doublon). La boutique et ses
-utilisateurs (PIN hashés bcrypt) se provisionnent **directement en base** :
-il n'y a plus de script de seed boutique.
+inséré et est relançable sans risque (aucun doublon). Les produits sont
+cloisonnés par `shop_id` : chaque boutique ne voit que son propre catalogue.
 
 ## Authentification
 
