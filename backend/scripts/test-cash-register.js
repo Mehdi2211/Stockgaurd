@@ -20,7 +20,7 @@
 const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
-const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
 // Charge backend/.env si présent
@@ -35,15 +35,19 @@ if (fs.existsSync(envPath)) {
 }
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:4000";
-const JWT_SECRET = process.env.JWT_SECRET;
 const DATABASE_URL = process.env.DATABASE_URL;
 
-if (!JWT_SECRET || !DATABASE_URL) {
-  console.error("ERREUR : JWT_SECRET et DATABASE_URL sont obligatoires.");
+if (!DATABASE_URL) {
+  console.error("ERREUR : DATABASE_URL est obligatoire.");
   process.exit(1);
 }
 
 const pool = new Pool({ connectionString: DATABASE_URL });
+
+// Identifiants de test : les jetons proviennent EXCLUSIVEMENT de
+// POST /api/auth/login (aucun JWT fabriqué à la main).
+const TEST_OWNER_PIN = "1357";
+const TEST_PIN = "4321";
 
 let passed = 0;
 let failed = 0;
@@ -73,10 +77,27 @@ async function api(method, path, { token, body } = {}) {
   return { status: res.status, data };
 }
 
-const sign = (payload) => jwt.sign(payload, JWT_SECRET, { expiresIn: "1h" });
+// Jeton PROPRIÉTAIRE d'une boutique : login réel via l'API (PIN).
+async function loginOwner(shopId) {
+  const { rows } = await pool.query(`SELECT code FROM shops WHERE id = $1`, [shopId]);
+  const r = await api("POST", "/auth/login", { body: { code: rows[0].code, pin: TEST_OWNER_PIN, role: "OWNER" } });
+  if (r.status !== 200) throw new Error(`login OWNER échoué (${r.status}) ${JSON.stringify(r.data)}`);
+  return r.data.token;
+}
+
+// Jeton CAISSIER d'une boutique : login réel (PIN) via l'API.
+async function loginCashier(shopId) {
+  const { rows } = await pool.query(`SELECT code FROM shops WHERE id = $1`, [shopId]);
+  const r = await api("POST", "/auth/login", { body: { code: rows[0].code, pin: TEST_PIN } });
+  if (r.status !== 200) throw new Error(`login CASHIER échoué (${r.status}) ${JSON.stringify(r.data)}`);
+  return r.data.token;
+}
 
 async function main() {
   console.log("\n=== Préparation : boutique de test ===");
+  const OWNER_HASH = await bcrypt.hash(TEST_OWNER_PIN, 8);
+  const CASHIER_HASH = await bcrypt.hash(TEST_PIN, 8);
+
   const shopCode = `T${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
   const shop = await pool.query(
     `INSERT INTO shops (name, code) VALUES ($1, $2) RETURNING id`,
@@ -85,16 +106,16 @@ async function main() {
   const shopId = shop.rows[0].id;
 
   const owner = await pool.query(
-    `INSERT INTO app_users (shop_id, name, role, email, password_hash)
-     VALUES ($1, 'Propriétaire Test', 'OWNER', $2, 'x') RETURNING id`,
-    [shopId, `owner-${shopCode.toLowerCase()}@test.local`]
+    `INSERT INTO app_users (shop_id, name, role, email, pin_hash)
+     VALUES ($1, 'Propriétaire Test', 'OWNER', $2, $3) RETURNING id`,
+    [shopId, `owner-${shopCode.toLowerCase()}@test.local`, OWNER_HASH]
   );
   const ownerId = owner.rows[0].id;
 
   const cashier = await pool.query(
     `INSERT INTO app_users (shop_id, name, role, pin_hash)
-     VALUES ($1, 'Caissier Test', 'CASHIER', 'x') RETURNING id`,
-    [shopId]
+     VALUES ($1, 'Caissier Test', 'CASHIER', $2) RETURNING id`,
+    [shopId, CASHIER_HASH]
   );
   const cashierId = cashier.rows[0].id;
 
@@ -105,8 +126,8 @@ async function main() {
   );
   const productId = prod.rows[0].id;
 
-  const ownerToken = sign({ userId: ownerId, shopId, role: "OWNER" });
-  const cashierToken = sign({ userId: cashierId, shopId, role: "CASHIER" });
+  const ownerToken = await loginOwner(shopId);
+  const cashierToken = await loginCashier(shopId);
 
   const nowIso = new Date().toISOString();
 
@@ -151,11 +172,11 @@ async function main() {
     [`F${crypto.randomBytes(3).toString("hex").toUpperCase()}`]
   );
   const ownerF = await pool.query(
-    `INSERT INTO app_users (shop_id, name, role, email, password_hash)
-     VALUES ($1, 'Owner F', 'OWNER', $2, 'x') RETURNING id`,
-    [shopF.rows[0].id, `ownerf-${crypto.randomBytes(3).toString("hex")}@test.local`]
+    `INSERT INTO app_users (shop_id, name, role, email, pin_hash)
+     VALUES ($1, 'Owner F', 'OWNER', $2, $3) RETURNING id`,
+    [shopF.rows[0].id, `ownerf-${crypto.randomBytes(3).toString("hex")}@test.local`, OWNER_HASH]
   );
-  const tokenF = sign({ userId: ownerF.rows[0].id, shopId: shopF.rows[0].id, role: "OWNER" });
+  const tokenF = await loginOwner(shopF.rows[0].id);
   const beforeF = Date.now();
   r = await api("POST", "/cash-register/initialize", {
     token: tokenF, body: { amount: 1000, initializedAt: futureDate },
@@ -343,11 +364,11 @@ async function main() {
     [`P${crypto.randomBytes(3).toString("hex").toUpperCase()}`]
   );
   const ownerP = await pool.query(
-    `INSERT INTO app_users (shop_id, name, role, email, password_hash)
-     VALUES ($1, 'Owner Parallèle', 'OWNER', $2, 'x') RETURNING id`,
-    [shopP.rows[0].id, `ownerp-${crypto.randomBytes(3).toString("hex")}@test.local`]
+    `INSERT INTO app_users (shop_id, name, role, email, pin_hash)
+     VALUES ($1, 'Owner Parallèle', 'OWNER', $2, $3) RETURNING id`,
+    [shopP.rows[0].id, `ownerp-${crypto.randomBytes(3).toString("hex")}@test.local`, OWNER_HASH]
   );
-  const tokenP = sign({ userId: ownerP.rows[0].id, shopId: shopP.rows[0].id, role: "OWNER" });
+  const tokenP = await loginOwner(shopP.rows[0].id);
   r = await api("POST", "/cash-register/initialize", {
     token: tokenP, body: { amount: 10000, initializedAt: nowIso },
   });
@@ -379,11 +400,11 @@ async function main() {
     [`Y${crypto.randomBytes(3).toString("hex").toUpperCase()}`]
   );
   const owner2 = await pool.query(
-    `INSERT INTO app_users (shop_id, name, role, email, password_hash)
-     VALUES ($1, 'Owner2', 'OWNER', $2, 'x') RETURNING id`,
-    [shop2.rows[0].id, `owner2-${crypto.randomBytes(3).toString("hex")}@test.local`]
+    `INSERT INTO app_users (shop_id, name, role, email, pin_hash)
+     VALUES ($1, 'Owner2', 'OWNER', $2, $3) RETURNING id`,
+    [shop2.rows[0].id, `owner2-${crypto.randomBytes(3).toString("hex")}@test.local`, OWNER_HASH]
   );
-  const token2 = sign({ userId: owner2.rows[0].id, shopId: shop2.rows[0].id, role: "OWNER" });
+  const token2 = await loginOwner(shop2.rows[0].id);
   r = await api("GET", "/cash-register/expected", { token: token2 });
   check("expected initialized=false", r.data?.initialized === false, `data=${JSON.stringify(r.data)}`);
   r = await api("POST", "/cash-register/deposits", {

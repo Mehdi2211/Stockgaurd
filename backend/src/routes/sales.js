@@ -1,5 +1,4 @@
 const express = require("express");
-const pool = require("../db");
 const { authenticate } = require("../middleware/auth");
 
 const router = express.Router();
@@ -42,7 +41,7 @@ router.post("/", authenticate, async (req, res) => {
   }
 
   const productIds = [...merged.keys()];
-  const client = await pool.connect();
+  const client = await req.db.connect();
   try {
     await client.query("BEGIN");
 
@@ -145,7 +144,7 @@ async function fetchLines(client, saleId) {
 // ---------------------------------------------------------------------
 router.get("/", authenticate, async (req, res) => {
   try {
-    const { rows: sales } = await pool.query(
+    const { rows: sales } = await req.db.query(
       `SELECT s.id, s.number AS "saleNumber", s.total,
               s.created_at AS "createdAt",
               CASE WHEN s.customer_id IS NULL THEN 'CASH' ELSE 'CREDIT' END AS "paymentMethod",
@@ -161,7 +160,7 @@ router.get("/", authenticate, async (req, res) => {
     if (sales.length === 0) return res.json({ sales: [] });
 
     const ids = sales.map((s) => s.id);
-    const { rows: lines } = await pool.query(
+    const { rows: lines } = await req.db.query(
       `SELECT sl.sale_id, sl.id, sl.product_id AS "productId", sl.quantity,
               sl.unit_price AS "unitPrice", sl.line_total AS "lineTotal",
               p.name AS "productName"

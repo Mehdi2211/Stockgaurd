@@ -1,60 +1,65 @@
 import React, { useState, useEffect } from "react";
 import AppShell from "../components/AppShell";
-import { useToast } from "../context/KioskContext";
+import { apiFetch } from "../api";
 
 
 const dt = (m) => (m / 1000).toFixed(3) + " DT";
 
-// Demo stats — replaced by real API later
-const DEMO_STATS = {
-  salesToday:       47300,
-  countToday:       12,
-  totalCredit:      68200,
-  activeCustomers:  34,
-  activeProducts:   58,
-  pendingCustomers: 3,
+const EMPTY_STATS = {
+  salesToday:       0,
+  countToday:       0,
+  totalCredit:      0,
+  activeCustomers:  0,
+  activeProducts:   0,
+  pendingCustomers: 0,
 };
 
 export default function OwnerDashboard() {
-  const toast = useToast();
-  const [stats, setStats] = useState(DEMO_STATS);
+  const [stats,   setStats]   = useState(EMPTY_STATS);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState("");
 
   useEffect(() => {
-    fetch("/api/owner/stats")
-      .then((r) => r.ok ? r.json() : Promise.reject())
-      .then(setStats)
-      .catch(() => {}); // keep demo stats if no backend
-  }, [toast]);
+    let cancelled = false;
+    setLoading(true);
+    apiFetch("/owner/stats")
+      .then((d) => { if (!cancelled) { setStats(d); setError(""); } })
+      .catch((err) => { if (!cancelled) setError(err.message || "Chargement impossible."); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <AppShell>
       <div className="owner-page">
         <h1 className="page-title">Tableau de bord</h1>
 
+        {error && <p className="error-msg" role="alert">{error}</p>}
+
         <div className="stats-grid">
           <div className="stat-card">
             <span className="stat-label">Ventes aujourd&apos;hui</span>
-            <span className="stat-value">{dt(stats.salesToday)}</span>
+            <span className="stat-value">{loading ? "…" : dt(stats.salesToday)}</span>
           </div>
           <div className="stat-card">
             <span className="stat-label">Nombre de ventes</span>
-            <span className="stat-value">{stats.countToday}</span>
+            <span className="stat-value">{loading ? "…" : stats.countToday}</span>
           </div>
           <div className="stat-card">
             <span className="stat-label">Crédit en cours</span>
-            <span className="stat-value warn">{dt(stats.totalCredit)}</span>
+            <span className="stat-value warn">{loading ? "…" : dt(stats.totalCredit)}</span>
           </div>
           <div className="stat-card">
             <span className="stat-label">Clients actifs</span>
-            <span className="stat-value">{stats.activeCustomers}</span>
+            <span className="stat-value">{loading ? "…" : stats.activeCustomers}</span>
           </div>
           <div className="stat-card">
             <span className="stat-label">Produits actifs</span>
-            <span className="stat-value">{stats.activeProducts}</span>
+            <span className="stat-value">{loading ? "…" : stats.activeProducts}</span>
           </div>
           <div className="stat-card">
             <span className="stat-label">Clients en attente</span>
-            <span className="stat-value warn">{stats.pendingCustomers}</span>
+            <span className="stat-value warn">{loading ? "…" : stats.pendingCustomers}</span>
           </div>
         </div>
 

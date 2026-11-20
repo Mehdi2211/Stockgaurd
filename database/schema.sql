@@ -1,4 +1,4 @@
-﻿-- =====================================================================
+-- =====================================================================
 -- StockGuard - MVP schema for PostgreSQL / Supabase
 -- =====================================================================
 
@@ -32,32 +32,46 @@ CREATE TABLE IF NOT EXISTS app_users (
   email               text,
   password_hash       text,
   pin_hash            text,
+  google_sub          text,                                        -- migration 010
+  email_verified      boolean NOT NULL DEFAULT false,               -- migration 010
   is_active           boolean NOT NULL DEFAULT true,
   failed_pin_attempts smallint NOT NULL DEFAULT 0,
   locked_until        timestamptz,
   created_at          timestamptz NOT NULL DEFAULT now(),
+  -- Propriétaire : email + PIN (le mot de passe reste accepté pour les
+  -- comptes/tests existants). Caissier : PIN.
   CONSTRAINT app_users_credentials_chk CHECK (
-       (role = 'OWNER'   AND email IS NOT NULL AND password_hash IS NOT NULL)
+       (role = 'OWNER'
+          AND email IS NOT NULL
+          AND (pin_hash IS NOT NULL OR password_hash IS NOT NULL))
     OR (role = 'CASHIER' AND pin_hash IS NOT NULL)
   )
 );
 CREATE UNIQUE INDEX IF NOT EXISTS app_users_shop_email_uq
   ON app_users (shop_id, lower(email)) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS app_users_shop_google_sub_uq
+  ON app_users (shop_id, google_sub) WHERE google_sub IS NOT NULL;   -- migration 010
 
 CREATE TABLE IF NOT EXISTS products (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   shop_id        uuid NOT NULL REFERENCES shops(id),
   barcode        text,
   name           text NOT NULL CHECK (length(btrim(name)) > 0),
-  price          bigint NOT NULL CHECK (price >= 0),
+  category       text,
+  price          bigint NOT NULL CHECK (price >= 0),          -- prix de vente (millimes)
+  buy_price      bigint,                                      -- prix d'achat (millimes, migration 009)
   current_stock  numeric(12,3) NOT NULL DEFAULT 0,
   min_stock      numeric(12,3) NOT NULL DEFAULT 0 CHECK (min_stock >= 0),
   is_active      boolean NOT NULL DEFAULT true,
   created_at     timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT products_barcode_len_chk CHECK (barcode IS NULL OR length(barcode) BETWEEN 4 AND 32)
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT products_barcode_len_chk  CHECK (barcode IS NULL OR length(barcode) BETWEEN 4 AND 32),
+  CONSTRAINT products_buy_price_chk    CHECK (buy_price IS NULL OR buy_price >= 0),
+  CONSTRAINT products_category_len_chk CHECK (category IS NULL OR length(btrim(category)) BETWEEN 1 AND 60)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS products_shop_barcode_uq ON products (shop_id, barcode) WHERE barcode IS NOT NULL;
 CREATE INDEX IF NOT EXISTS products_shop_name_idx ON products (shop_id, lower(name));
+CREATE INDEX IF NOT EXISTS products_shop_category_idx ON products (shop_id, category) WHERE category IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS customers (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -102,6 +116,7 @@ CREATE INDEX IF NOT EXISTS sales_customer_idx     ON sales (customer_id) WHERE c
 CREATE TABLE IF NOT EXISTS sale_lines (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   sale_id     uuid NOT NULL REFERENCES sales(id),
+  shop_id     uuid REFERENCES shops(id),   -- migration 007 : isolation boutique
   product_id  uuid NOT NULL REFERENCES products(id),
   quantity    numeric(12,3) NOT NULL CHECK (quantity > 0),
   unit_price  bigint NOT NULL CHECK (unit_price >= 0),
@@ -109,6 +124,31 @@ CREATE TABLE IF NOT EXISTS sale_lines (
 );
 CREATE INDEX IF NOT EXISTS sale_lines_sale_idx    ON sale_lines (sale_id);
 CREATE INDEX IF NOT EXISTS sale_lines_product_idx ON sale_lines (product_id);
+CREATE INDEX IF NOT EXISTS sale_lines_shop_idx    ON sale_lines (shop_id);
+
+-- Migration 008 : journal des scans produits (n'affecte ni stock ni caisse).
+CREATE TABLE IF NOT EXISTS product_scans (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  shop_id     uuid NOT NULL REFERENCES shops(id),
+  product_id  uuid REFERENCES products(id),
+  barcode     text NOT NULL CHECK (length(btrim(barcode)) BETWEEN 1 AND 32),
+  quantity    numeric(12,3) NOT NULL DEFAULT 1 CHECK (quantity > 0),
+  scanned_by  uuid NOT NULL REFERENCES app_users(id),
+  scanned_at  timestamptz NOT NULL DEFAULT now(),
+  status      text NOT NULL DEFAULT 'matched'
+              CHECK (status IN ('matched', 'unknown', 'sold', 'cancelled')),
+  sale_id     uuid REFERENCES sales(id),
+  CONSTRAINT product_scans_unknown_chk
+    CHECK ((status = 'unknown') = (product_id IS NULL))
+);
+CREATE INDEX IF NOT EXISTS product_scans_shop_scanned_idx
+  ON product_scans (shop_id, scanned_at DESC);
+CREATE INDEX IF NOT EXISTS product_scans_shop_barcode_idx
+  ON product_scans (shop_id, barcode);
+CREATE INDEX IF NOT EXISTS product_scans_shop_user_idx
+  ON product_scans (shop_id, scanned_by, scanned_at DESC);
+CREATE INDEX IF NOT EXISTS product_scans_sale_idx
+  ON product_scans (sale_id) WHERE sale_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS stock_movements (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -271,13 +311,6 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 DO $$ BEGIN
-  ALTER TABLE cash_verifications
-    ADD CONSTRAINT cv_actual_bound_chk
-    CHECK (actual_balance <= 9999999999) NOT VALID;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-
-DO $$ BEGIN
   ALTER TABLE cash_movements
     ADD CONSTRAINT cm_description_len_chk
     CHECK (description IS NULL OR length(btrim(description)) BETWEEN 3 AND 200) NOT VALID;
@@ -323,6 +356,15 @@ CREATE TABLE IF NOT EXISTS cash_verifications (
 );
 CREATE INDEX IF NOT EXISTS cash_verifications_shop_created_idx
   ON cash_verifications (shop_id, created_at);
+
+-- CHECK migration 002 (NOT VALID) : borne sur le solde réel constaté.
+-- Placé APRÈS la création de cash_verifications (référence directe).
+DO $$ BEGIN
+  ALTER TABLE cash_verifications
+    ADD CONSTRAINT cv_actual_bound_chk
+    CHECK (actual_balance <= 9999999999) NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 DROP TRIGGER IF EXISTS cash_verifications_admin_chk ON cash_verifications;
 CREATE TRIGGER cash_verifications_admin_chk

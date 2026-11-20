@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import AppShell from "../components/AppShell";
 import { useToast } from "../context/KioskContext";
+import { apiFetch } from "../api";
 
 
 const fmt = (d) => new Date(d).toLocaleString("fr-TN");
@@ -8,54 +9,53 @@ const fmt = (d) => new Date(d).toLocaleString("fr-TN");
 const TYPE_LABEL = { INITIAL: "Initial", RESTOCK: "Réappro.", SALE: "Vente", ADJUSTMENT: "Ajustement" };
 const TYPE_BADGE = { INITIAL: "badge-muted", RESTOCK: "badge-success", SALE: "badge-warn", ADJUSTMENT: "badge-info" };
 
-// Demo movements — replaced by real API later
-const DEMO_MOVEMENTS = [
-  { id: "m1", createdAt: new Date(Date.now() - 10 * 60000).toISOString(), product: { name: "Lait demi-écrémé 1 L" }, type: "SALE",       quantity: -2,  reason: "Vente #1042",        saleNumber: "1042" },
-  { id: "m2", createdAt: new Date(Date.now() - 25 * 60000).toISOString(), product: { name: "Pain baguette" },        type: "SALE",       quantity: -3,  reason: "Vente #1041",        saleNumber: "1041" },
-  { id: "m3", createdAt: new Date(Date.now() - 60 * 60000).toISOString(), product: { name: "Huile d'olive 1 L" },    type: "RESTOCK",    quantity: +24, reason: "Réapprovisionnement", saleNumber: null   },
-  { id: "m4", createdAt: new Date(Date.now() - 90 * 60000).toISOString(), product: { name: "Harissa 380 g" },        type: "SALE",       quantity: -1,  reason: "Vente #1040",        saleNumber: "1040" },
-  { id: "m5", createdAt: new Date(Date.now() - 2 * 3600000).toISOString(),product: { name: "Eau minérale 1,5 L" },   type: "ADJUSTMENT", quantity: -4,  reason: "Perte / casse",      saleNumber: null   },
-  { id: "m6", createdAt: new Date(Date.now() - 3 * 3600000).toISOString(),product: { name: "Spaghetti 500 g" },      type: "INITIAL",    quantity: +50, reason: "Stock initial",       saleNumber: null   },
-];
-
-const DEMO_PRODUCTS = [
-  { id: "1", name: "Lait demi-écrémé 1 L" },
-  { id: "2", name: "Pain baguette" },
-  { id: "3", name: "Huile d'olive 1 L" },
-  { id: "4", name: "Harissa 380 g" },
-  { id: "5", name: "Eau minérale 1,5 L" },
-  { id: "6", name: "Spaghetti 500 g" },
-];
-
 export default function StockManagement() {
   const toast = useToast();
-  const [movements, setMovements] = useState(DEMO_MOVEMENTS);
-  const [products]                = useState(DEMO_PRODUCTS);
+  const [movements, setMovements] = useState([]);
+  const [products,  setProducts]  = useState([]);
   const [form,      setForm]      = useState({ productId: "", quantity: "", reason: "" });
   const [loading,   setLoading]   = useState(false);
+  const [listLoading, setListLoading] = useState(true);
+  const [error,     setError]     = useState("");
   const [showForm,  setShowForm]  = useState(false);
+
+  const loadMovements = () =>
+    apiFetch("/stock/movements")
+      .then((d) => { setMovements(d.movements || []); setError(""); })
+      .catch((err) => setError(err.message || "Chargement impossible."));
+
+  useEffect(() => {
+    let cancelled = false;
+    setListLoading(true);
+    Promise.all([loadMovements(), apiFetch("/products?all=true")
+      .then((d) => { if (!cancelled) setProducts(d.products || []); })
+      .catch(() => {})])
+      .finally(() => { if (!cancelled) setListLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
+    const quantity = parseFloat(form.quantity);
+    if (!form.productId) { toast("Sélectionnez un produit."); return; }
+    if (!Number.isFinite(quantity) || quantity === 0) { toast("Quantité invalide (non nulle)."); return; }
+    if (form.reason.trim().length < 3) { toast("Le motif doit contenir au moins 3 caractères."); return; }
 
-    // Demo: add locally
-    await new Promise((r) => setTimeout(r, 300));
-    const prod = products.find((p) => p.id === form.productId);
-    const newMove = {
-      id:        "m" + Date.now(),
-      createdAt: new Date().toISOString(),
-      product:   { name: prod?.name || form.productId },
-      type:      "ADJUSTMENT",
-      quantity:  parseFloat(form.quantity),
-      reason:    form.reason,
-      saleNumber: null,
-    };
-    setMovements((prev) => [newMove, ...prev]);
-    toast("Ajustement enregistré ✓");
-    setForm({ productId: "", quantity: "", reason: "" });
-    setShowForm(false);
-    setLoading(false);
+    setLoading(true);
+    try {
+      await apiFetch("/stock/adjustment", {
+        method: "POST",
+        body: JSON.stringify({ productId: form.productId, quantity, reason: form.reason.trim() }),
+      });
+      toast("Ajustement enregistré ✓");
+      setForm({ productId: "", quantity: "", reason: "" });
+      setShowForm(false);
+      await loadMovements();
+    } catch (err) {
+      toast(err.message || "Erreur lors de l'ajustement.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -68,6 +68,8 @@ export default function StockManagement() {
             {showForm ? "Annuler" : "+ Ajustement"}
           </button>
         </div>
+
+        {error && <p className="error-msg" role="alert">{error}</p>}
 
         {showForm && (
           <div className="panel mb-2">
@@ -116,12 +118,14 @@ export default function StockManagement() {
               </tr>
             </thead>
             <tbody>
-              {movements.length === 0 ? (
+              {listLoading ? (
+                <tr><td colSpan={5} className="empty-state">Chargement…</td></tr>
+              ) : movements.length === 0 ? (
                 <tr><td colSpan={5} className="empty-state">Aucun mouvement enregistré.</td></tr>
               ) : movements.map((m) => (
                 <tr key={m.id}>
                   <td>{fmt(m.createdAt)}</td>
-                  <td>{m.product?.name || "—"}</td>
+                  <td>{m.productName || "—"}</td>
                   <td>
                     <span className={`badge ${TYPE_BADGE[m.type] || "badge-muted"}`}>
                       {TYPE_LABEL[m.type] || m.type}

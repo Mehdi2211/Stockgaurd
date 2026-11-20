@@ -7,7 +7,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { Pool } = require("pg");
-const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 
 const envPath = path.join(__dirname, "..", ".env");
 for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
@@ -21,6 +21,12 @@ const pool = new Pool({
 });
 
 const BASE = process.env.API_BASE || "http://localhost:4000/api";
+
+// Identifiants de test : les jetons proviennent EXCLUSIVEMENT de
+// POST /api/auth/login (aucun JWT fabriqué à la main).
+const TEST_OWNER_PIN = "1357";
+const TEST_PIN = "4321";
+
 let pass = 0, fail = 0;
 function ok(cond, label) {
   if (cond) { pass++; console.log("  PASS", label); }
@@ -36,8 +42,21 @@ async function api(token, method, p, body) {
   try { data = await res.json(); } catch {}
   return { status: res.status, data };
 }
-function tokenFor(userId, shopId, role) {
-  return jwt.sign({ userId, shopId, role }, process.env.JWT_SECRET, { expiresIn: "1h" });
+
+// Jeton PROPRIÉTAIRE d'une boutique : login réel via l'API (PIN).
+async function loginOwner(shopId) {
+  const { rows } = await pool.query(`SELECT code FROM shops WHERE id = $1`, [shopId]);
+  const r = await api(null, "POST", "/auth/login", { code: rows[0].code, pin: TEST_OWNER_PIN, role: "OWNER" });
+  if (r.status !== 200) throw new Error(`login OWNER échoué (${r.status}) ${JSON.stringify(r.data)}`);
+  return r.data.token;
+}
+
+// Jeton CAISSIER d'une boutique : login réel (PIN) via l'API.
+async function loginCashier(shopId) {
+  const { rows } = await pool.query(`SELECT code FROM shops WHERE id = $1`, [shopId]);
+  const r = await api(null, "POST", "/auth/login", { code: rows[0].code, pin: TEST_PIN });
+  if (r.status !== 200) throw new Error(`login CASHIER échoué (${r.status}) ${JSON.stringify(r.data)}`);
+  return r.data.token;
 }
 
 (async () => {
@@ -47,16 +66,17 @@ function tokenFor(userId, shopId, role) {
     `INSERT INTO shops (name, code) VALUES ($1, $2) RETURNING id`,
     [tag, `T${crypto.randomInt(100000, 999999)}`])).rows[0];
   const owner = (await pool.query(
-    `INSERT INTO app_users (shop_id, name, role, email, password_hash) VALUES ($1,'Owner Test','OWNER',$2,'x') RETURNING id`,
-    [shop.id, `owner-${Date.now()}@test.local`])).rows[0];
+    `INSERT INTO app_users (shop_id, name, role, email, pin_hash) VALUES ($1,'Owner Test','OWNER',$2,$3) RETURNING id`,
+    [shop.id, `owner-${Date.now()}@test.local`, await bcrypt.hash(TEST_OWNER_PIN, 8)])).rows[0];
   const cashier = (await pool.query(
-    `INSERT INTO app_users (shop_id, name, role, pin_hash) VALUES ($1,'Caissier Test','CASHIER','x') RETURNING id`, [shop.id])).rows[0];
+    `INSERT INTO app_users (shop_id, name, role, pin_hash) VALUES ($1,'Caissier Test','CASHIER',$2) RETURNING id`,
+    [shop.id, await bcrypt.hash(TEST_PIN, 8)])).rows[0];
   const customer = (await pool.query(
     `INSERT INTO customers (shop_id, first_name, family_name, phone, cin, pin_hash, status, created_by)
      VALUES ($1,'Ali','Test','12345678','12345678','x','PENDING',$2) RETURNING id`, [shop.id, owner.id])).rows[0];
 
-  const ownerTok = tokenFor(owner.id, shop.id, "OWNER");
-  const cashierTok = tokenFor(cashier.id, shop.id, "CASHIER");
+  const ownerTok = await loginOwner(shop.id);
+  const cashierTok = await loginCashier(shop.id);
 
   console.log("== Validation client ==");
   let r = await api(cashierTok, "POST", `/credits/customers/${customer.id}/validate`);
@@ -103,11 +123,11 @@ function tokenFor(userId, shopId, role) {
      VALUES ($1,'INITIALIZATION',10000,'init',$2, now() - interval '1 hour', now() - interval '1 hour')`,
     [shop.id, owner.id]);
   const svc = require("../src/services/cashRegister");
-  const exp = await svc.computeExpected(shop.id, new Date());
+  const exp = await svc.computeExpected(pool, shop.id, new Date());
   ok(exp.initialized && exp.cashRepayments === 2000 && exp.repaymentsCount === 1,
     `computeExpected : remboursements = 2000 (reçu ${exp.cashRepayments})`);
   ok(exp.expectedAmount === 10000 + 2000, "Montant attendu = init + remboursements");
-  const reps = await svc.listRepayments(shop.id, new Date(0), new Date(Date.now() + 60000));
+  const reps = await svc.listRepayments(pool, shop.id, new Date(0), new Date(Date.now() + 60000));
   ok(reps.length === 1 && reps[0].customerName === "Ali Test", "listRepayments : nom du créditeur");
 
   console.log(`\n=== Résultat : ${pass} PASS, ${fail} FAIL ===`);

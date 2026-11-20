@@ -1,4 +1,4 @@
-﻿// Charge backend/.env si présent (pas de dépendance dotenv)
+// Charge backend/.env si présent (pas de dépendance dotenv)
 const fs = require("fs");
 const path = require("path");
 const envPath = path.join(__dirname, "..", ".env");
@@ -16,8 +16,11 @@ const cors       = require("cors");
 const helmet     = require("helmet");
 const rateLimit  = require("express-rate-limit");
 
+const authRoutes     = require("./routes/auth");
+const shopRoutes     = require("./routes/shop");
 const kioskRoutes    = require("./routes/kiosk");
 const productRoutes  = require("./routes/products");
+const scanRoutes     = require("./routes/scans");
 const salesRoutes    = require("./routes/sales");
 const customerRoutes = require("./routes/customers");
 const stockRoutes    = require("./routes/stock");
@@ -38,8 +41,11 @@ const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
 app.use("/api/", limiter);
 
 // Routes
+app.use("/api/auth",      authRoutes);
+app.use("/api/shop",      shopRoutes);
 app.use("/api/kiosk",     kioskRoutes);
 app.use("/api/products",  productRoutes);
+app.use("/api/scans",     scanRoutes);
 app.use("/api/sales",     salesRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/stock",     stockRoutes);
@@ -53,10 +59,12 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 // 404
 app.use((_req, res) => res.status(404).json({ error: "Route introuvable." }));
 
-// Global error handler
+// Gestionnaire d'erreurs centralisé : journal complet côté serveur,
+// message générique côté client (jamais de fuite de détails techniques).
 app.use((err, _req, res, _next) => {
-  console.error(err);
-  res.status(500).json({ error: "Erreur interne du serveur." });
+  console.error("[erreur]", err);
+  if (res.headersSent) return;
+  res.status(err.status || 500).json({ error: "Erreur interne du serveur." });
 });
 
 app.listen(PORT, () => console.log(`StockGuard backend : http://localhost:${PORT}`));

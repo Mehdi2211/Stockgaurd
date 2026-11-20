@@ -1,21 +1,23 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useKiosk } from "../context/KioskContext";
 import { useNavigate } from "react-router-dom";
+import { apiFetch } from "../api";
 
 
-// Demo admin PIN — 4 digits
-const ADMIN_PIN = "1234";
+const PIN_RE = /^[0-9]{4,8}$/;
 
+// Accès administrateur : le propriétaire se connecte avec le code de la
+// boutique courante + son PIN d'administration (aucun email/mot de passe).
+// Le jeton OWNER renvoyé remplace le jeton caissier actif.
 export default function AdminPinModal({ onClose }) {
-  const { elevate }  = useKiosk();
-  const navigate     = useNavigate();
-  const [pin,  setPin]  = useState("");
-  const [error, setError] = useState("");
+  const { kiosk, elevate } = useKiosk();
+  const navigate           = useNavigate();
+  const [pin,     setPin]     = useState("");
+  const [error,   setError]   = useState("");
+  const [loading, setLoading] = useState(false);
   const inputRef = useRef(null);
 
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  useEffect(() => { inputRef.current?.focus(); }, []);
 
   // Close on Escape
   useEffect(() => {
@@ -26,15 +28,28 @@ export default function AdminPinModal({ onClose }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (pin !== ADMIN_PIN) {
-      setError("PIN incorrect.");
-      setPin("");
-      inputRef.current?.focus();
-      return;
+    setError("");
+    if (!kiosk?.code) { setError("Boutique inconnue, reconnectez-vous."); return; }
+    if (!PIN_RE.test(pin.trim())) { setError("Le PIN doit contenir 4 à 8 chiffres."); return; }
+    setLoading(true);
+    try {
+      const data = await apiFetch("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ code: kiosk.code, pin: pin.trim(), role: "OWNER" }),
+        authRedirect: false,
+      });
+      if (data.user.role !== "OWNER") {
+        setError("Ce PIN n'est pas celui d'un propriétaire.");
+        setLoading(false);
+        return;
+      }
+      elevate({ token: data.token });
+      onClose();
+      navigate("/owner");
+    } catch (err) {
+      setError(err.message || "Identifiants invalides.");
+      setLoading(false);
     }
-    elevate();
-    onClose();
-    navigate("/owner");
   };
 
   return (
@@ -45,13 +60,13 @@ export default function AdminPinModal({ onClose }) {
           <button className="modal-close" onClick={onClose} aria-label="Fermer">✕</button>
         </div>
 
-        <p className="modal-hint">Entrez le PIN du propriétaire pour accéder au tableau de bord.</p>
+        <p className="modal-hint">Saisissez le PIN d&apos;administration pour accéder au tableau de bord.</p>
 
         <form onSubmit={handleSubmit} autoComplete="off">
           {error && <p className="error-msg" role="alert">{error}</p>}
 
           <div className="field">
-            <label className="sg-label" htmlFor="adminPin">PIN propriétaire</label>
+            <label className="sg-label" htmlFor="adminPin">PIN d&apos;administration</label>
             <input
               id="adminPin"
               ref={inputRef}
@@ -59,18 +74,17 @@ export default function AdminPinModal({ onClose }) {
               type="password"
               inputMode="numeric"
               placeholder="••••"
-              maxLength={6}
+              maxLength={8}
               value={pin}
-              onChange={(e) => { setPin(e.target.value); setError(""); }}
+              onChange={(e) => { setPin(e.target.value.replace(/\D/g, "")); setError(""); }}
               required
             />
-            <p className="hint">Mode démo — PIN : <code>1234</code></p>
           </div>
 
           <div className="modal-actions">
             <button type="button" className="btn-ghost" onClick={onClose}>Annuler</button>
-            <button type="submit" className="btn-primary" style={{ flex: 1 }}>
-              Accéder
+            <button type="submit" className="btn-primary" style={{ flex: 1 }} disabled={loading}>
+              {loading ? "Connexion…" : "Accéder"}
             </button>
           </div>
         </form>

@@ -1,5 +1,4 @@
 const express = require("express");
-const pool = require("../db");
 const { authenticate, requireOwner } = require("../middleware/auth");
 const svc = require("../services/cashRegister");
 const {
@@ -43,7 +42,7 @@ router.post("/initialize", async (req, res) => {
   // La date d'initialisation est TOUJOURS l'heure du serveur (now()) :
   // effective_at = created_at, dans la même transaction. Toute date
   // fournie dans le body (initializedAt ou autre) est ignorée.
-  const client = await pool.connect();
+  const client = await req.db.connect();
   try {
     await client.query("BEGIN");
     await lockShop(client, req.user.shopId);
@@ -78,7 +77,7 @@ router.post("/initialize", async (req, res) => {
 // ---------------------------------------------------------------------
 router.get("/expected", async (req, res) => {
   try {
-    const expected = await svc.computeExpected(req.user.shopId, new Date());
+    const expected = await svc.computeExpected(req.db, req.user.shopId, new Date());
     if (!expected.initialized) {
       return res.json({ initialized: false });
     }
@@ -108,7 +107,7 @@ router.get("/expected", async (req, res) => {
 // Mouvements manuels : retraits, dépôts, ajustements
 // ---------------------------------------------------------------------
 async function insertMovement(req, res, { type, amount, description }) {
-  const client = await pool.connect();
+  const client = await req.db.connect();
   try {
     await client.query("BEGIN");
     await lockShop(client, req.user.shopId);
@@ -123,7 +122,7 @@ async function insertMovement(req, res, { type, amount, description }) {
     // (amount est déjà signé : négatif pour WITHDRAWAL)
     // 409 = conflit d'état (solde insuffisant), pas une erreur de saisie.
     if (type === "WITHDRAWAL") {
-      const expected = await svc.computeExpected(req.user.shopId, new Date());
+      const expected = await svc.computeExpected(req.db, req.user.shopId, new Date());
       if (expected.initialized && Math.abs(amount) > expected.expectedAmount) {
         await client.query("ROLLBACK");
         return res.status(409).json({
@@ -184,7 +183,7 @@ router.post("/adjustments", async (req, res) => {
   }
 
   const signed = direction === "ADD" ? amount : -amount;
-  const client = await pool.connect();
+  const client = await req.db.connect();
   try {
     await client.query("BEGIN");
     await lockShop(client, req.user.shopId);
@@ -196,7 +195,7 @@ router.post("/adjustments", async (req, res) => {
     }
 
     if (direction === "REMOVE") {
-      const expected = await svc.computeExpected(req.user.shopId, new Date());
+      const expected = await svc.computeExpected(req.db, req.user.shopId, new Date());
       if (expected.initialized && amount > expected.expectedAmount) {
         await client.query("ROLLBACK");
         return res.status(409).json({
@@ -235,7 +234,7 @@ router.post("/reinitialize", async (req, res) => {
     return res.status(400).json({ error: "Montant réel invalide (entier en millimes, >= 0)." });
   }
 
-  const client = await pool.connect();
+  const client = await req.db.connect();
   try {
     await client.query("BEGIN");
     await lockShop(client, req.user.shopId);
@@ -247,7 +246,7 @@ router.post("/reinitialize", async (req, res) => {
     }
 
     // Montant attendu recalculé par le serveur au moment de l'enregistrement.
-    const expected = await svc.computeExpected(req.user.shopId, new Date());
+    const expected = await svc.computeExpected(req.db, req.user.shopId, new Date());
 
     const { rows: verRows } = await client.query(
       `INSERT INTO cash_verifications (shop_id, theoretical_balance, actual_balance, admin_id)
@@ -295,7 +294,7 @@ router.post("/verifications", async (req, res) => {
     return res.status(400).json({ error: "Montant compté invalide (entier en millimes, >= 0)." });
   }
 
-  const client = await pool.connect();
+  const client = await req.db.connect();
   try {
     await client.query("BEGIN");
     await lockShop(client, req.user.shopId);
@@ -306,7 +305,7 @@ router.post("/verifications", async (req, res) => {
       return res.status(409).json({ error: "Initialisez d'abord la caisse." });
     }
 
-    const expected = await svc.computeExpected(req.user.shopId, new Date());
+    const expected = await svc.computeExpected(req.db, req.user.shopId, new Date());
 
     const { rows } = await client.query(
       `INSERT INTO cash_verifications (shop_id, theoretical_balance, actual_balance, admin_id)
@@ -345,7 +344,7 @@ router.get("/repayments", async (req, res) => {
   const period = parsePeriod(req, res);
   if (!period) return;
   try {
-    const repayments = await svc.listRepayments(req.user.shopId, period.from, period.to);
+    const repayments = await svc.listRepayments(req.db, req.user.shopId, period.from, period.to);
     res.json({ repayments });
   } catch (err) {
     handleError(res, err, "repayments");
@@ -361,7 +360,7 @@ router.get("/movements", async (req, res) => {
   if (!period) return;
 
   try {
-    const { rows } = await pool.query(
+    const { rows } = await req.db.query(
       `SELECT m.id, m.type, m.amount, m.description, m.sale_id,
               m.admin_id, m.created_at, u.name AS admin_name
          FROM cash_movements m
@@ -387,7 +386,7 @@ router.get("/verifications", async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
 
   try {
-    const { rows } = await pool.query(
+    const { rows } = await req.db.query(
       `SELECT v.id, v.theoretical_balance, v.actual_balance,
               v.difference, v.status, v.admin_id, v.created_at,
               u.name AS admin_name

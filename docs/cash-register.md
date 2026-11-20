@@ -113,9 +113,17 @@ node scripts/apply-migration.js 002_cash_register_init_date.sql
 
 ## Backend
 
-- `src/db.js` — pool `pg` (`DATABASE_URL`, SSL auto si Supabase).
-- `src/middleware/auth.js` — `authenticate` (JWT `Authorization: Bearer`,
-  `JWT_SECRET`) et `requireOwner`.
+- `src/db.js` — pool `pg` partagé (`DATABASE_URL`, SSL auto si Supabase).
+- `src/middleware/auth.js` — `requireAuth` (JWT `Authorization: Bearer`,
+  `JWT_SECRET`, expose `req.user = { userId, shopId, role }`) et
+  `requireRole("OWNER")` (alias historiques `authenticate` / `requireOwner`
+  conservés pour les routes caisse / produits / crédits).
+- `src/routes/auth.js` — `POST /api/auth/login` : vérifie les identifiants
+  **en base** sur le **PIN** uniquement (OWNER `{ code, pin, role: "OWNER" }` ;
+  CASHIER `{ code, pin, role: "CASHIER" }`, `bcrypt.compare` contre
+  `app_users.pin_hash`) et renvoie un JWT signé (`JWT_SECRET`,
+  `JWT_EXPIRES_IN`). L'email n'intervient pas dans le login ; il est
+  conservé pour l'envoi ultérieur de notifications.
 - `src/validators/cashRegister.js` — validateurs stricts partagés :
   `validateAmount` (entier millimes, bornes), `validateDescription`
   (3-200 caractères, sans caractères de contrôle, au moins une lettre ou
@@ -242,12 +250,13 @@ créditeur est exposé par `GET /api/cash-register/repayments`.
   (regex `^\d{1,7}([.,]\d{1,3})?$`, 3 décimales max, sans flottant),
   testé par `amount.test.js` (Jest).
 - `src/api.js` — `apiFetch` joint `Authorization: Bearer <jeton>` depuis
-  `localStorage["sg_token"]`. **Le flux de login (hors périmètre) doit
-  enregistrer le JWT sous cette clé** pour que les appels authentifiés
-  fonctionnent. Les erreurs affichent le message français du serveur
-  (`error`/`message`) ; réseau ou statut inconnu → « Le service est
-  indisponible, réessayez. » (détails techniques en console uniquement,
-  jamais « Erreur 404 » brut).
+  `localStorage["sg_token"]`. Le jeton est posé par la **page de login
+  réelle** (`POST /api/auth/login`, `src/pages/KioskLogin.js`). Les erreurs
+  affichent le message français du serveur (`error`/`message`) ; réseau ou
+  statut inconnu → « Le service est indisponible, réessayez. » (détails
+  techniques en console uniquement, jamais « Erreur 404 » brut). Sur
+  `401`, le jeton est effacé et l'application redirige vers le login
+  (`authRedirect: false` pour l'appel de login lui-même).
 - **Proxy dev** : `frontend/package.json` contient
   `"proxy": "http://localhost:4000"` — sans lui, le serveur de dev CRA
   renvoie `index.html` pour `GET /api/*` et 404 pour `POST /api/*`
@@ -268,7 +277,7 @@ créditeur est exposé par `GET /api/cash-register/repayments`.
 ## Tests
 
 ```bash
-# 1. Migrer la base (schema.sql + migrations 001..006)
+# 1. Migrer la base (schema.sql + migrations 001..009)
 # 2. Démarrer le backend :  cd backend && npm run dev
 # 3. Tests unitaires validateurs backend :
 cd backend && node scripts/test-validators.js
@@ -279,9 +288,15 @@ cd backend && node scripts/test-frontend-cash.js
 # 6. Tests d'intégration caisse :
 cd backend
 DATABASE_URL="postgresql://..." JWT_SECRET="..." node scripts/test-cash-register.js
-# 7. Tests d'intégration crédits (dettes, remboursements, validation client) :
+# 7. Tests d'intégration caisse (variante, login réel) :
+cd backend
+DATABASE_URL="postgresql://..." JWT_SECRET="..." node scripts/test-cash-register-v2.js
+# 8. Tests d'intégration crédits (dettes, remboursements, validation client) :
 cd backend
 DATABASE_URL="postgresql://..." JWT_SECRET="..." node scripts/test-credits.js
+# 9. Tests d'intégration auth/produits/scans/isolation :
+cd backend
+DATABASE_URL="postgresql://..." JWT_SECRET="..." node scripts/test-auth-products-scans.js
 ```
 
 Le script d'intégration couvre : **date d'initialisation automatique**
@@ -311,8 +326,10 @@ boutique réelle n'est touchée.
 
 ## Limites connues
 
-- Le login/émission de JWT est hors périmètre : sans jeton stocké sous
-  `sg_token`, l'interface affiche « Authentification requise ».
+- Le login est **réel** (`POST /api/auth/login`, identifiants en base,
+  JWT signé avec `JWT_SECRET`). Sans jeton valide sous `sg_token`,
+  l'interface affiche « Authentification requise » et une erreur `401`
+  redirige vers la page de login.
 - Les ventes à crédit (client + code personnel) ne sont pas implémentées :
   la gestion des crédits se fait par **dette manuelle** (`POST
   /api/credits/debts`) et **remboursement** (`POST /api/credits/repayments`),

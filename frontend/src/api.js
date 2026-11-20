@@ -39,13 +39,17 @@ function userMessage(data, status) {
 }
 
 export async function apiFetch(path, options = {}) {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  // `authRedirect` (défaut true) : sur 401, purge le jeton et renvoie
+  // vers l'écran de connexion. Les appels de login s'en passent (false)
+  // pour afficher l'erreur sans recharger la page.
+  const { authRedirect = true, ...fetchOptions } = options;
+  const headers = { "Content-Type": "application/json", ...(fetchOptions.headers || {}) };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
   let res;
   try {
-    res = await fetch(`/api${path}`, { ...options, headers });
+    res = await fetch(`/api${path}`, { ...fetchOptions, headers });
   } catch (networkErr) {
     // Erreur réseau / service injoignable : message lisible, détail en console.
     console.error(`[api] réseau ${path}:`, networkErr);
@@ -63,6 +67,11 @@ export async function apiFetch(path, options = {}) {
   }
 
   if (!res.ok) {
+    // Session expirée / jeton invalide : retour à l'écran de connexion.
+    if (res.status === 401 && authRedirect) {
+      setToken(null);
+      if (window.location.pathname !== "/") window.location.assign("/");
+    }
     const err = new Error(userMessage(data, res.status));
     err.status = res.status;
     err.data = data;

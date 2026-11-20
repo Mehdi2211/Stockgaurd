@@ -1,4 +1,4 @@
-﻿// =====================================================================
+// =====================================================================
 // Tests v2 du module caisse — section 7 (réinitialisation + breakdown)
 // Time travel : les lignes sont insérées en SQL avec created_at explicite
 // (dates passées), puis computeExpected(shopId, T) est appelé à un T choisi.
@@ -11,7 +11,7 @@
 const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
-const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
 const envPath = path.join(__dirname, "..", ".env");
@@ -26,7 +26,10 @@ const BASE_URL = process.env.BASE_URL || "http://localhost:4000";
 const svc = require("../src/services/cashRegister");
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const sign = (p) => jwt.sign(p, process.env.JWT_SECRET, { expiresIn: "1h" });
+
+// Jetons obtenus EXCLUSIVEMENT via POST /api/auth/login (aucun JWT manuel).
+const TEST_OWNER_PIN = "1357";
+const TEST_PIN = "4321";
 
 let passed = 0, failed = 0;
 function check(name, cond, detail = "") {
@@ -48,24 +51,42 @@ async function api(method, p, { token, body } = {}) {
 const H = 3600e3;
 const at = (base, hours) => new Date(base.getTime() + hours * H);
 
+// Jeton PROPRIÉTAIRE d'une boutique : login réel via l'API (PIN).
+async function loginOwner(shopId) {
+  const { rows } = await pool.query(`SELECT code FROM shops WHERE id = $1`, [shopId]);
+  const r = await api("POST", "/auth/login", { body: { code: rows[0].code, pin: TEST_OWNER_PIN, role: "OWNER" } });
+  if (r.status !== 200) throw new Error(`login OWNER échoué (${r.status}) ${JSON.stringify(r.data)}`);
+  return r.data.token;
+}
+
+// Jeton CAISSIER d'une boutique : login réel (PIN) via l'API.
+async function loginCashier(shopId) {
+  const { rows } = await pool.query(`SELECT code FROM shops WHERE id = $1`, [shopId]);
+  const r = await api("POST", "/auth/login", { body: { code: rows[0].code, pin: TEST_PIN } });
+  if (r.status !== 200) throw new Error(`login CASHIER échoué (${r.status}) ${JSON.stringify(r.data)}`);
+  return r.data.token;
+}
+
 async function makeShop(tag) {
   const code = `V${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
   const shop = await pool.query(
     `INSERT INTO shops (name, code) VALUES ($1, $2) RETURNING id`,
     [`Test v2 ${tag} ${code}`, code]);
   const shopId = shop.rows[0].id;
+  const ownerHash = await bcrypt.hash(TEST_OWNER_PIN, 8);
   const owner = await pool.query(
-    `INSERT INTO app_users (shop_id, name, role, email, password_hash)
-     VALUES ($1, 'Owner', 'OWNER', $2, 'x') RETURNING id`,
-    [shopId, `o-${code.toLowerCase()}@t.local`]);
+    `INSERT INTO app_users (shop_id, name, role, email, pin_hash)
+     VALUES ($1, 'Owner', 'OWNER', $2, $3) RETURNING id`,
+    [shopId, `o-${code.toLowerCase()}@t.local`, ownerHash]);
   const ownerId = owner.rows[0].id;
+  const pinHash = await bcrypt.hash(TEST_PIN, 8);
   const cashier = await pool.query(
     `INSERT INTO app_users (shop_id, name, role, pin_hash)
-     VALUES ($1, 'Cashier', 'CASHIER', 'x') RETURNING id`, [shopId]);
+     VALUES ($1, 'Cashier', 'CASHIER', $2) RETURNING id`, [shopId, pinHash]);
   return {
     shopId, ownerId, cashierId: cashier.rows[0].id,
-    ownerToken: sign({ userId: ownerId, shopId, role: "OWNER" }),
-    cashierToken: sign({ userId: cashier.rows[0].id, shopId, role: "CASHIER" }),
+    ownerToken: await loginOwner(shopId),
+    cashierToken: await loginCashier(shopId),
   };
 }
 
@@ -122,7 +143,7 @@ async function main() {
   await insertAdjustment(A.shopId, A.ownerId, -10000, "Ajustement retrait", at(t0, 3));
 
   // --- Test 1 : computeExpected(t0+4h) = 275 500 ---
-  const e1 = await svc.computeExpected(A.shopId, at(t0, 4));
+  const e1 = await svc.computeExpected(pool, A.shopId, at(t0, 4));
   check("T1 attendu = 275.500", e1.expectedAmount === 275500, `got ${e1.expectedAmount}`);
   check("T1 ventes espèces = 15.500 (1 vente)", e1.cashSales === 15500 && e1.salesCount === 1,
     `sales=${e1.cashSales} count=${e1.salesCount}`);
@@ -139,7 +160,7 @@ async function main() {
   const t0b = new Date(Date.now() - 5 * H);
   await insertInit(B.shopId, B.ownerId, 100000, t0b);
   await insertSale(B.shopId, B.cashierId, null, 5000, at(t0b, 2));
-  const eB = await svc.computeExpected(B.shopId, at(t0b, 1));
+  const eB = await svc.computeExpected(pool, B.shopId, at(t0b, 1));
   check("B : vente après T exclue (attendu = 100.000)", eB.expectedAmount === 100000,
     `got ${eB.expectedAmount}`);
 
@@ -163,10 +184,10 @@ async function main() {
   // vérifier qu'elle n'est pas comptée à T=maintenant mais l'est plus tard.
   const futureSale = new Date(Date.now() + 60e3);
   await insertSale(A.shopId, A.cashierId, null, 10000, futureSale);
-  const eNow = await svc.computeExpected(A.shopId, new Date());
+  const eNow = await svc.computeExpected(pool, A.shopId, new Date());
   check("après réinit : attendu = 270.000 (tout l'historique ignoré)",
     eNow.expectedAmount === 270000, `got ${eNow.expectedAmount}`);
-  const eLater = await svc.computeExpected(A.shopId, new Date(Date.now() + 120e3));
+  const eLater = await svc.computeExpected(pool, A.shopId, new Date(Date.now() + 120e3));
   check("vente post-réinit comptée plus tard : 280.000", eLater.expectedAmount === 280000,
     `got ${eLater.expectedAmount}`);
 
@@ -184,7 +205,7 @@ async function main() {
     token: A.ownerToken, body: { amount: 270001, direction: "REMOVE" },
   });
   check("REMOVE 270.001 > 270.000 -> 409", r.status === 409, `status=${r.status}`);
-  const eA2 = await svc.computeExpected(A.shopId, new Date());
+  const eA2 = await svc.computeExpected(pool, A.shopId, new Date());
   check("montant attendu inchangé (270.000)", eA2.expectedAmount === 270000, `got ${eA2.expectedAmount}`);
 
   // --- Test 5 : deux REMOVE parallèles ---
@@ -195,7 +216,7 @@ async function main() {
   ]);
   const st = [pa.status, pb.status].sort((x, y) => x - y);
   check("un REMOVE 201, l'autre 409", st[0] === 201 && st[1] === 409, `pa=${pa.status} pb=${pb.status}`);
-  const eA3 = await svc.computeExpected(A.shopId, new Date());
+  const eA3 = await svc.computeExpected(pool, A.shopId, new Date());
   check("solde final = 70.000", eA3.expectedAmount === 70000, `got ${eA3.expectedAmount}`);
 
   // --- Test 6 : motif par défaut / invalide ---

@@ -1,10 +1,16 @@
-﻿# Dependencies
+# Dependencies
 node_modules/
 
 # Environment secrets – NEVER commit
 .env
 backend/.env
 frontend/.env
+
+# Registre multi-boutique (contient les URLs de bases des clients)
+backend/shops.json
+
+# Identifiants générés (code boutique + PIN en clair) – développeur uniquement
+backend/shop-credentials.csv
 
 # Build outputs
 frontend/build/

@@ -1,5 +1,4 @@
 const express = require("express");
-const pool = require("../db");
 const { authenticate } = require("../middleware/auth");
 
 const router = express.Router();
@@ -44,7 +43,7 @@ function handleError(res, err, context) {
 router.get("/customers", async (req, res) => {
   if (!isStaff(req)) return forbidden(res);
   try {
-    const { rows } = await pool.query(
+    const { rows } = await req.db.query(
       `SELECT c.id, c.first_name AS "firstName", c.family_name AS "familyName",
               c.phone, c.cin, c.status,
               COALESCE(SUM(cr.amount), 0)::bigint AS balance
@@ -74,7 +73,7 @@ router.get("/customers/:id", async (req, res) => {
     return res.status(400).json({ error: "Identifiant client invalide." });
   }
   try {
-    const { rows: cust } = await pool.query(
+    const { rows: cust } = await req.db.query(
       `SELECT c.id, c.first_name AS "firstName", c.family_name AS "familyName",
               c.phone, c.cin, c.status,
               COALESCE(SUM(cr.amount), 0)::bigint AS balance
@@ -86,7 +85,7 @@ router.get("/customers/:id", async (req, res) => {
     );
     if (cust.length === 0) return res.status(404).json({ error: "Client introuvable." });
 
-    const { rows: history } = await pool.query(
+    const { rows: history } = await req.db.query(
       `SELECT cr.id, cr.amount, cr.note, cr.sale_id, cr.reverses_id,
               cr.created_at AS "createdAt", u.name AS "recordedByName"
          FROM credits cr
@@ -117,7 +116,7 @@ router.post("/customers/:id/validate", async (req, res) => {
     return res.status(400).json({ error: "Identifiant client invalide." });
   }
   try {
-    const { rows } = await pool.query(
+    const { rows } = await req.db.query(
       `UPDATE customers
           SET status = 'VALIDATED', validated_by = $3, validated_at = now()
         WHERE shop_id = $1 AND id = $2 AND status = 'PENDING'
@@ -160,7 +159,7 @@ router.post("/debts", async (req, res) => {
     return res.status(400).json({ error: "Identifiant de dette invalide (UUID attendu)." });
   }
 
-  const client = await pool.connect();
+  const client = await req.db.connect();
   try {
     await client.query("BEGIN");
 
@@ -235,7 +234,7 @@ router.post("/repayments", async (req, res) => {
     return res.status(400).json({ error: "Identifiant de remboursement invalide (UUID attendu)." });
   }
 
-  const client = await pool.connect();
+  const client = await req.db.connect();
   try {
     await client.query("BEGIN");
 

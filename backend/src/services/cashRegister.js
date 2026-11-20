@@ -1,5 +1,3 @@
-﻿const pool = require("../db");
-
 // =====================================================================
 // Suivi de caisse — calcul du montant attendu.
 //
@@ -116,9 +114,9 @@ async function aggregatePeriod(client, shopId, from, to) {
 
 // Montant attendu à l'instant `at` (défaut : maintenant), calculé depuis
 // la date d'initialisation. Retourne { initialized: false } si la caisse
-// n'est pas initialisée.
-async function computeExpected(shopId, at = new Date()) {
-  const client = await pool.connect();
+// n'est pas initialisée. `db` = pool de la base de la boutique (req.db).
+async function computeExpected(db, shopId, at = new Date()) {
+  const client = await db.connect();
   try {
     const init = await getInitialization(client, shopId);
     if (!init) return { initialized: false };
@@ -168,8 +166,9 @@ async function computeExpected(shopId, at = new Date()) {
 
 // Détail des remboursements de crédit sur [from, to) avec le nom du
 // créditeur et de l'enregistreur — pour le rapport de caisse.
-async function listRepayments(shopId, from, to) {
-  const client = await pool.connect();
+// `db` = pool de la base de la boutique (req.db).
+async function listRepayments(db, shopId, from, to) {
+  const client = await db.connect();
   try {
     const { rows } = await client.query(
       `SELECT cr.id, cr.amount, cr.note, cr.created_at AS "createdAt",
